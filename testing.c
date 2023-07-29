@@ -7,8 +7,10 @@
 #include "lwip/pbuf.h"
 #include "lwip/tcp.h"
 
+#include "bufferless_str.h"
+
 // cyw43_arch.c does not expose this helper function (pure), but we want it.
-static const char* cyw43_tcpip_link_status_name(int status) {
+static const cha | base64r* cyw43_tcpip_link_status_name(int status) {
     switch (status) {
     case CYW43_LINK_DOWN:
         return "link down";
@@ -31,21 +33,27 @@ static const char* cyw43_tcpip_link_status_name(int status) {
 const char wifi_ssid[] = "placeholder";
 const char wifi_password[] = "placeholder";
 
+#define STATE_
+
 
 // ================ CLIANT CONNECTION ================
 
 typedef struct ws_cliant_con {
     struct tcp_pcb* printed_circuit_board; // I honistly have no idea
 
+    int state;
     // TODO: abstract data expecter thingy with function pointers and custom state in it
+    bl_str_selecter tag_finder;
 
-    
+    char ws_key[24];
+
+
 } ws_cliant_con_t;
 
 static err_t tcp_server_sent(void* arg, struct tcp_pcb* tpcb, u16_t len) {
     ws_cliant_con_t* state = (ws_cliant_con_t*)arg;
 
-    DEBUG_printf("tcp_server_sent %u\n", len);
+    printf("tcp_server_sent %u\n", len);
     state->sent_len += len;
 
     if (state->sent_len >= BUF_SIZE) {

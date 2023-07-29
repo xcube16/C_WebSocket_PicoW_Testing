@@ -28,6 +28,7 @@
         "cyw43_arch.h": "c",
         "sockets.h": "c",
         "lwipopts.h": "c",
-        "pbuf.h": "c"
+        "pbuf.h": "c",
+        "bufferless_str.h": "c"
     }
 }
