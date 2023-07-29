@@ -41,7 +41,19 @@ typedef struct base64_ctx_ {
 } base64_ctx;
 
 char base64bits(char base64) {
-
+    if (base64 >= 'A' && base64 <= 'Z') {
+        return base64 - 'A';
+    } else if (base64 >= 'a' && base64 <= 'z') {
+        return base64 - ('a' - ('Z' - 'A' + 1));
+    } else if (base64 >= '0' && base64 <= '9') {
+        return base64 - ('0' - ('Z' - 'A' + 1) - ('z' - 'a' + 1));
+    } else if (base64 == '+') {
+        return (('Z' - 'A' + 1) + ('z' - 'a' + 1) + ('9' - '0' + 1));
+    } else if (base64 == '+') {
+        return (('Z' - 'A' + 1) + ('z' - 'a' + 1) + ('9' - '0' + 1) + 1);
+    } else {
+        return -1;
+    }
 }
 
 int decode_base64(base64_ctx* ctx, char* base64_buf, char* output_buf, int base64_len, char end) {
@@ -49,32 +61,30 @@ int decode_base64(base64_ctx* ctx, char* base64_buf, char* output_buf, int base6
 
     uint32_t bytes = ctx->partial;
     int sub_i = bytes >> 30;
-    int i;
     int byte_index;
-    char shortcycle = 0;
+    int i;
 
     for (i = 0; i <= base64_len; i++) {
         if (i >= base64_len || base64_buf[i] == '=') {
-            if (!end && i >= base64_len) {
-                continue;
-            }
-            switch (sub_i) { // TODO: FIX bit offsets
-                case 3:
-                    // bytes be like: [ AAAAAABB BBBBCCCC CC------]
-                    // wanted:          ^^^^^^^^ ^^^^^^^^
-                    output_buf[++byte_index] = (bytes >> 8) & 0xFF;
+            if (end || i < base64_len) {
+                switch (sub_i) { // TODO: FIX bit offsets
+                    case 3:
+                        // bytes be like: [ ------AA AAAABBBB BBCCCCCC]
+                        // wanted:                ^^ ^^^^^^^^ ^^^^^^
+                        output_buf[++byte_index] = (bytes >> 2) & 0xFF;
+                        
+                        bytes >>= 6; // make bytes be like what case 2 expects
                     
-                    bytes >>= 6; // make bytes be like what case 2 expects
-                
-                case 2:
-                    // bytes be like: [ ------AA AAAABBBB BB------]
-                    // wanted:                ^^ ^^^^^^
+                    case 2:
+                        // bytes be like: [ -------- ----AAAA AABBBBBB]
+                        // wanted:                       ^^^^ ^^^^
 
-                    output_buf[++byte_index] = (bytes >> 10) & 0xFF;
+                        output_buf[++byte_index] = (bytes >> 4) & 0xFF;
 
-                // 0 and 1 previous base64 chars do not have enough bits for a byte
+                    // 0 and 1 previous base64 chars do not have enough bits for a byte
+                }
+                sub_i = 0;
             }
-            sub_i = 0;
             continue;
         }
 
@@ -89,4 +99,6 @@ int decode_base64(base64_ctx* ctx, char* base64_buf, char* output_buf, int base6
         }
     }
     ctx->partial = (sub_i << 30) | (bytes & 0x3FFFFFFF);
+
+    return byte_index; // return number of bytes decoded
 }
