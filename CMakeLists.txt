@@ -34,6 +34,7 @@ pico_enable_stdio_usb(testing 0)
 target_link_libraries(testing
     pico_stdlib
     pico_cyw43_arch_lwip_threadsafe_background
+    pico_mbedtls
 )
 
 # Add the standard include files to the build

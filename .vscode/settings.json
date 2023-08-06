@@ -29,6 +29,8 @@
         "sockets.h": "c",
         "lwipopts.h": "c",
         "pbuf.h": "c",
-        "bufferless_str.h": "c"
+        "bufferless_str.h": "c",
+        "sha1.h": "c",
+        "stats.h": "c"
     }
 }

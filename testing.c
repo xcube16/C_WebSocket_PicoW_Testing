@@ -9,6 +9,8 @@
 
 #include "bufferless_str.h"
 
+#include "mbedtls/sha1.h"
+
 // cyw43_arch.c does not expose this helper function (pure), but we want it.
 static const cha | base64r* cyw43_tcpip_link_status_name(int status) {
     switch (status) {
@@ -33,22 +35,150 @@ static const cha | base64r* cyw43_tcpip_link_status_name(int status) {
 const char wifi_ssid[] = "placeholder";
 const char wifi_password[] = "placeholder";
 
-#define STATE_
-
-
 // ================ CLIANT CONNECTION ================
 
-typedef struct ws_cliant_con {
+#define WS_STATE_HEADER 1
+#define WS_STATE_HEADER_KEY 2
+
+typedef struct ws_state_ {
+    int state;
+} ws_state;
+
+typedef struct ws_cliant_con_ {
     struct tcp_pcb* printed_circuit_board; // I honistly have no idea
 
-    int state;
+    // fill this buffer with the requested processable size
+    char* buf;
+    size_t buf_size;
+    size_t buf_total_size;
+
+    struct pbuf* p_current;
+    size_t recved_current;
+
+    ws_state* state;
     // TODO: abstract data expecter thingy with function pointers and custom state in it
     bl_str_selecter tag_finder;
 
-    char ws_key[24];
+    ws_state* state
 
 
-} ws_cliant_con_t;
+} ws_cliant_con;
+
+typedef err_t (*tcp_recv_fn)(ws_client_state *arg, struct tcp_pcb *tpcb,
+                             struct pbuf *p, err_t err);
+
+
+
+typedef struct ws_state_header_key_ {
+    ws_state state;
+    char* ws_key;
+    size_t ws_key_len;
+} ws_state_header_key;
+
+
+/**
+ * @brief Returns a condiguious byte array of the given size or null if we need to wait for more data.
+ * 
+ * @param cli_con 
+ * @param size 
+ * @return char* 
+ */
+char* ws_read(ws_cliant_con* cli_con, size_t size) {
+    if (!cli_con->p_current) {
+        return NULL; // We are still waiting for more data
+    }
+
+    if (cli_con->buf_size > size) {
+        printf("ERROR: Inconsistant read request! previous ask: %d, current ask: %d\n", cli_con->buf_size, size);
+    } else if (cli_con->buf_size == 0) {
+        // See if the first pbuf has enough bytes in it.
+        // That way we don't even need to use our own buffer.
+        if (cli_con->p_current->len >= size) {
+            char* payload = cli_con->p_current->payload;
+            cli_con->p_current = pbuf_free_header(cli_con->p_current, size);
+            cli_con->recved_current += size;
+            return payload;
+        }
+    }
+
+    // ensure that enough space is allocated in the buffer
+    if (cli_con->buf_total_size < size) {
+        char* new_buf = realloc(cli_con->buf, size); // TODO: maybe allocate more than just the min amount?
+        if (new_buf) {
+            cli_con->buf_total_size = size;
+            cli_con->buf = new_buf;
+        } else {
+            printf("ERROR: Failed to allocate %d bytes\n", size);
+            return NULL;
+        }
+    }
+
+    // fill the buffer until it reaches size or we run out of pbufs in the chain
+    u16_t bytes_read = pbuf_copy_partial(
+        cli_con->p_current,
+        cli_con->buf + cli_con->buf_size,
+        size - cli_con->buf_size,
+        0);
+    cli_con->p_current = pbuf_free_header(cli_con->p_current, bytes_read);
+
+    cli_con->buf_size       += bytes_read;
+    cli_con->recved_current += bytes_read;
+
+    if (cli_con->buf_size == size) {
+        cli_con->buf_size = 0;
+        return cli_con->buf;
+    }
+    return NULL; // We are still waiting for more data
+}
+
+/**
+ * @brief Provides access to the next raw pbuf payload. Call ws_consume() or ws_read() to
+ * actually advance the communication.
+ * 
+ * @param cli_con 
+ * @param buf_ptr Pointer to a buffer. Will be set of the number of bytes is > 0
+ * @return size_t Number of bytes available
+ */
+size_t ws_peak(ws_cliant_con* cli_con, char** buf_ptr) {
+    if (cli_con->buf_size != 0) {
+        *buf_ptr = cli_con->buf;
+        return cli_con->buf_size;
+    }
+    if (!cli_con->p_current) {
+        return 0; // We are still waiting for more data
+    }
+    *buf_ptr = cli_con->p_current->payload;
+    return cli_con->p_current->len;
+}
+
+int ws_consume(ws_cliant_con* cli_con, size_t size) {
+    if (cli_con->buf_size > 0) {
+        // Not really sure why one would fail to read in the last call and
+        // then use ws_peak and ws_consume, but as long as the full buffer is consumed
+        // we can let this minor inconsistancy slide.
+        // TODO: Maybe add a warning?
+        if (cli_con->buf_size != size) {
+            printf("ERROR: Inconsistant consume request! previous ask: %d, current ask: %d\n", cli_con->buf_size, size);
+            return ERR_ARG;
+        }
+        cli_con->buf_size       -= size;
+        cli_con->recved_current += size;
+
+        return ERR_OK;
+    }
+    
+    if (!cli_con->p_current) {
+        if (size == 0) {
+            return ERR_OK; // consume 0 bytes? well ok.
+        }
+        printf("ERROR: Can't consume bytes that we dont have yet! %d\n", size);
+        return ERR_ARG;
+    }
+
+    cli_con->p_current = pbuf_free_header(cli_con->p_current, size);
+    cli_con->recved_current += size;
+    return ERR_OK;
+}
 
 static err_t tcp_server_sent(void* arg, struct tcp_pcb* tpcb, u16_t len) {
     ws_cliant_con_t* state = (ws_cliant_con_t*)arg;
@@ -67,7 +197,7 @@ static err_t tcp_server_sent(void* arg, struct tcp_pcb* tpcb, u16_t len) {
 }
 
 err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) {
-    TCP_SERVER_T *state = (TCP_SERVER_T*)arg;
+    ws_cliant_con* cli_con = (ws_cliant_con*)arg;
     if (!p) {
         return tcp_server_result(arg, -1);
     }
@@ -75,16 +205,30 @@ err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
     // can use this method to cause an assertion in debug mode, if this method is called when
     // cyw43_arch_lwip_begin IS needed
     cyw43_arch_lwip_check();
-    if (p->tot_len > 0) {
-        DEBUG_printf("tcp_server_recv %d/%d err %d\n", p->tot_len, state->recv_len, err);
-
-        // Receive the buffer
-        const uint16_t buffer_left = BUF_SIZE - state->recv_len;
-        state->recv_len += pbuf_copy_partial(p, state->buffer_recv + state->recv_len,
-                                             p->tot_len > buffer_left ? buffer_left : p->tot_len, 0);
-        tcp_recved(tpcb, p->tot_len);
+    if (p->tot_len == 0) {
+        pbuf_free(p);
+        return ERR_OK;
     }
-    pbuf_free(p);
+
+    DEBUG_printf("tcp_server_recv %d/%d err %d\n", p->tot_len, state->recv_len, err);
+
+    cli_con->p_current = p;
+
+    // READ STUFF until we run out of bytes
+    switch (cli_con->state) {
+
+    }
+
+    // pbufs got freed as we used them
+    tcp_recved(tpcb, cli_con->recved_current);
+    cli_con->recved_current = 0;
+
+    // Receive the buffer
+    const uint16_t buffer_left = BUF_SIZE - state->recv_len;
+    state->recv_len += pbuf_copy_partial(p, state->buffer_recv + state->recv_len,
+                                             p->tot_len > buffer_left ? buffer_left : p->tot_len, 0);
+
+    // \/ SCRAP CODE \/
 
     // Have we have received the whole buffer
     if (state->recv_len == BUF_SIZE) {
