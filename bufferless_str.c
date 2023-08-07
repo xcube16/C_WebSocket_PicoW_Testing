@@ -22,7 +22,7 @@ int bl_str_select (bl_str_selecter* selecter, char* buf, int buf_len) {
             do {
                 selecter->list_index++;
                 if (selecter->list_index >= selecter->strs_len) {
-                    return -2; // no match
+                    return BL_STR_NO_MATCH; // no match
                 }
             } while (strncmp(selecter->strs[selecter->list_index], str, selecter->str_index) != 0);
             str = selecter->strs[selecter->list_index];
@@ -33,7 +33,14 @@ int bl_str_select (bl_str_selecter* selecter, char* buf, int buf_len) {
     if (!str[selecter->str_index]) {
         return selecter->list_index;
     }
-    return -1; // no match yet
+    return BL_STR_NO_MATCH_YET; // no match yet
+}
+
+void bl_str_reset(bl_str_selecter* selecter, char** strs, int strs_len) {
+    selecter->strs = strs;
+    selecter->strs_len = strs_len;
+    selecter->list_index = 0;
+    selecter->str_index = 0;
 }
 
 typedef struct base64_ctx_ {

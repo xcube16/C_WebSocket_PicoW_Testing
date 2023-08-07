@@ -39,6 +39,17 @@ const char wifi_password[] = "placeholder";
 
 #define WS_STATE_HEADER 1
 #define WS_STATE_HEADER_KEY 2
+#define WS_STATE_CHECK_UPGRADE 3
+#define WS_STATE_EAT_WHITESPACE 4
+
+#define WS_H_FIELD_UPGRADE 0
+#define WS_H_FIELD_KEY 0
+
+#define WS_H_FIELDS_LEN 2
+const char* WS_H_FIELDS[] = {
+    "Upgrade",
+    "Sec-WebSocket-Key",
+};
 
 typedef struct ws_state_ {
     int state;
@@ -57,7 +68,7 @@ typedef struct ws_cliant_con_ {
 
     ws_state* state;
     // TODO: abstract data expecter thingy with function pointers and custom state in it
-    bl_str_selecter tag_finder;
+    
 
     ws_state* state
 
@@ -68,12 +79,16 @@ typedef err_t (*tcp_recv_fn)(ws_client_state *arg, struct tcp_pcb *tpcb,
                              struct pbuf *p, err_t err);
 
 
-
-typedef struct ws_state_header_key_ {
+typedef struct ws_state_header_ {
     ws_state state;
+    bl_str_selecter tag_finder;
+    char eating_wspace;
+
+    char found_upgrade;
     char* ws_key;
     size_t ws_key_len;
-} ws_state_header_key;
+
+} ws_state_header;
 
 
 /**
@@ -145,6 +160,7 @@ size_t ws_peak(ws_cliant_con* cli_con, char** buf_ptr) {
         return cli_con->buf_size;
     }
     if (!cli_con->p_current) {
+        *buf_ptr = NULL;
         return 0; // We are still waiting for more data
     }
     *buf_ptr = cli_con->p_current->payload;
@@ -215,9 +231,113 @@ err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
     cli_con->p_current = p;
 
     // READ STUFF until we run out of bytes
-    switch (cli_con->state) {
-
+    if (!cli_con->state) {
+        cli_con->state = malloc(sizeof(ws_state_header)));
+        memset(cli_con->state, 0);
+        cli_con->state = WS_STATE_HEADER;
+        ws_state_header* state_h = cli_con->state;
+        bl_str_reset(&state_h->tag_finder, WS_H_FIELDS, WS_H_FIELDS_LEN);
     }
+    char* buffer;
+    int len;
+    int i;
+    while (true) {}
+        switch (cli_con->state->state) {
+            case WS_STATE_HEADER:
+                ws_state_header* state_h = cli_con->state;
+                len = ws_peak(cli_con, &buffer);
+                if (!len) {
+                    goto no_more_bytes;
+                }
+
+                for (i = 0; i < len && buffer[i] != ':'; i++);
+
+                int selected = bl_str_select(&state_h->tag_finder, buffer, i);
+                if (i < len) {
+                    switch (selected) {
+                        case WS_H_FIELD_UPGRADE:
+                            state_h->state = WS_STATE_CHECK_UPGRADE;
+                            state_h->eating_wspace = 1;
+                            bl_str_reset(&state_h->tag_finder, &"websocket", 1);
+                            break;
+
+                        case WS_H_FIELD_KEY:
+                            break;
+
+                        case BL_STR_NO_MATCH:
+                        case BL_STR_NO_MATCH_YET:
+                            break;
+                    }
+                }
+                ws_consume(cli_con, i);
+                break;
+
+            case WS_STATE_CHECK_UPGRADE:
+                state_h = cli_con->state;
+                len = ws_peak(cli_con, &buffer);
+                if (!len) {
+                    goto no_more_bytes;
+                }
+
+                int skip = 0;
+                for (i = 0; i < len && buffer[i] != '\r' && buffer[i] != '\n'; i++) {
+                    if (state_h->eating_wspace) {
+                        if (buffer[i] == ' ' || buffer[i] == '\t') {
+                            skip++;
+                        } else {
+                            state_h->eating_wspace = 0;
+                        }
+                    }
+                }
+                selected = bl_str_select(&state_h->tag_finder, buffer + skip, i - skip);
+                if (i < len) {
+                    if (selected == 0) { // we found 'websocket'
+                        cli_con->found_upgrade = 1;
+                    }
+                    // ---> eat end lines and whitespace
+                    state_h->state = WS_STATE_EAT_WHITESPACE;
+                }
+                ws_consume(cli_con, i);
+                break;
+            case WS_STATE_EAT_WHITESPACE:
+                state_h = cli_con->state;
+                len = ws_peak(cli_con, &buffer);
+                if (!len) {
+                    goto no_more_bytes;
+                }
+                int endl_count = 0;
+                for (i = 0; i < len && (
+                    buffer[i] == '\r' ||
+                    buffer[i] == '\n' ||
+                    buffer[i] == ' ' ||
+                    buffer[i] == '\t'
+                    ); i++) {
+                        
+                    if (buffer[i] == '\n') {
+                        endl_count++;
+                        if (endl_count >= 2) {
+                            // found the end of the header
+                            i++; // make sure we consume the last byte
+                            break;
+                        }
+                        
+                    }    
+                }
+                if (endl_count >= 2){
+                    ws_parse_header(cli_con);
+                } else if (i < len) {
+                    // ---> go back to header scanning
+                    state_h->state = WS_STATE_HEADER;
+                    bl_str_reset(&state_h->tag_finder, WS_H_FIELDS, WS_H_FIELDS_LEN);
+                }
+                ws_consume(cli_con, i); // nom nom nom
+
+                break;
+
+
+        }
+    }
+    no_more_bytes:
 
     // pbufs got freed as we used them
     tcp_recved(tpcb, cli_con->recved_current);

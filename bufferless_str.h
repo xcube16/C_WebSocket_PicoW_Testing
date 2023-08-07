@@ -3,7 +3,12 @@
 
 #include <string.h>
 
+#define BL_STR_NO_MATCH_YET -1
+#define BL_STR_NO_MATCH -2
+
 typedef struct bl_str_selecter_ {
+    const char** strs;
+    int strs_len;
     int list_index;
     int str_index;
 } bl_str_selecter;
@@ -23,4 +28,5 @@ typedef struct bl_str_selecter_ {
  */
 int bl_str_select (bl_str_selecter* selecter, char* buf, int buf_len);
 
+void bl_str_reset (bl_str_selecter* selecter, char** strs);
 #endif
