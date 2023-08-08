@@ -82,7 +82,7 @@ typedef err_t (*tcp_recv_fn)(ws_client_state *arg, struct tcp_pcb *tpcb,
 typedef struct ws_state_header_ {
     ws_state state;
     bl_str_selecter tag_finder;
-    char eating_wspace;
+    char sub_state;
 
     char found_upgrade;
     char* ws_key;
@@ -257,11 +257,13 @@ err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
                     switch (selected) {
                         case WS_H_FIELD_UPGRADE:
                             state_h->state = WS_STATE_CHECK_UPGRADE;
-                            state_h->eating_wspace = 1;
+                            state_h->sub_state = 1;
                             bl_str_reset(&state_h->tag_finder, &"websocket", 1);
                             break;
 
                         case WS_H_FIELD_KEY:
+                            state_h->state = WS_STATE_HEADER_KEY;
+                            state_h->sub_state = 1;
                             break;
 
                         case BL_STR_NO_MATCH:
@@ -280,12 +282,16 @@ err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
                 }
 
                 int skip = 0;
-                for (i = 0; i < len && buffer[i] != '\r' && buffer[i] != '\n'; i++) {
-                    if (state_h->eating_wspace) {
-                        if (buffer[i] == ' ' || buffer[i] == '\t') {
+                if (state_h->sub_state) {
+                    for (i = 0; i < len &&
+                            buffer[i] != '\r' &&
+                            buffer[i] != '\n'; i++) {
+                   
+                        if (buffer[i] == ':' || buffer[i] == ' ' || buffer[i] == '\t') {
                             skip++;
                         } else {
-                            state_h->eating_wspace = 0;
+                            state_h->sub_state = 0;
+                            break;
                         }
                     }
                 }
@@ -297,6 +303,30 @@ err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
                     // ---> eat end lines and whitespace
                     state_h->state = WS_STATE_EAT_WHITESPACE;
                 }
+                ws_consume(cli_con, i);
+                break;
+            case WS_STATE_HEADER_KEY:
+                state_h = cli_con->state;
+                len = ws_peak(cli_con, &buffer);
+                if (!len) {
+                    goto no_more_bytes;
+                }
+
+                int skip = 0;
+                if (state_h->sub_state) {
+                    for (i = 0; i < len &&
+                            buffer[i] != '\r' &&
+                            buffer[i] != '\n'; i++) {
+                   
+                        if (buffer[i] == ':' || buffer[i] == ' ' || buffer[i] == '\t') {
+                            skip++;
+                        } else {
+                            state_h->sub_state = 0;
+                            break;
+                        }
+                    }
+                }
+                
                 ws_consume(cli_con, i);
                 break;
             case WS_STATE_EAT_WHITESPACE:
@@ -320,8 +350,7 @@ err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
                             i++; // make sure we consume the last byte
                             break;
                         }
-                        
-                    }    
+                    }
                 }
                 if (endl_count >= 2){
                     ws_parse_header(cli_con);
