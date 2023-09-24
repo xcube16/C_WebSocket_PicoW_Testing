@@ -36,7 +36,7 @@ int bl_str_select (bl_str_selecter* selecter, char* buf, int buf_len) {
     return BL_STR_NO_MATCH_YET; // no match yet
 }
 
-void bl_str_reset(bl_str_selecter* selecter, char** strs, int strs_len) {
+void bl_str_reset(bl_str_selecter* selecter, const char** strs, int strs_len) {
     selecter->strs = strs;
     selecter->strs_len = strs_len;
     selecter->list_index = 0;

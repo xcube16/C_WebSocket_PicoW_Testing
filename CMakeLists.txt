@@ -4,6 +4,7 @@ set(PICO_BOARD pico_w)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
+add_compile_options(-save-temps=obj)
 
 # Pull in SDK (must be before project)
 include(pico_sdk_import.cmake)
@@ -16,9 +17,9 @@ pico_sdk_init()
 
 add_executable(testing
     testing.c
-    picow_tcp_server.c
     bufferless_str.c
     #lwipopts.h
+    sub_task.S
 )
 
 pico_set_program_name(testing "PICO_TESTING")

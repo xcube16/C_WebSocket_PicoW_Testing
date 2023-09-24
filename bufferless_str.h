@@ -28,5 +28,5 @@ typedef struct bl_str_selecter_ {
  */
 int bl_str_select (bl_str_selecter* selecter, char* buf, int buf_len);
 
-void bl_str_reset (bl_str_selecter* selecter, char** strs);
+void bl_str_reset (bl_str_selecter* selecter, const char** strs, int strs_len);
 #endif

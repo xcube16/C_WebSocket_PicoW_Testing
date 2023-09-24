@@ -31,6 +31,7 @@
         "pbuf.h": "c",
         "bufferless_str.h": "c",
         "sha1.h": "c",
-        "stats.h": "c"
+        "stats.h": "c",
+        "config.h": "c"
     }
 }

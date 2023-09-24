@@ -11,8 +11,10 @@
 
 #include "mbedtls/sha1.h"
 
+#define DEBUG_printf printf
+
 // cyw43_arch.c does not expose this helper function (pure), but we want it.
-static const cha | base64r* cyw43_tcpip_link_status_name(int status) {
+static const char* cyw43_tcpip_link_status_name(int status) {
     switch (status) {
     case CYW43_LINK_DOWN:
         return "link down";
@@ -34,6 +36,7 @@ static const cha | base64r* cyw43_tcpip_link_status_name(int status) {
 
 const char wifi_ssid[] = "placeholder";
 const char wifi_password[] = "placeholder";
+#define TCP_PORT 8080
 
 // ================ CLIANT CONNECTION ================
 
@@ -43,7 +46,7 @@ const char wifi_password[] = "placeholder";
 #define WS_STATE_EAT_WHITESPACE 4
 
 #define WS_H_FIELD_UPGRADE 0
-#define WS_H_FIELD_KEY 0
+#define WS_H_FIELD_KEY 1
 
 #define WS_H_FIELDS_LEN 2
 const char* WS_H_FIELDS[] = {
@@ -56,6 +59,7 @@ typedef struct ws_state_ {
 } ws_state;
 
 typedef struct ws_cliant_con_ {
+    struct tcp_pcb* server_pcb; // TODO: remove server pcb.
     struct tcp_pcb* printed_circuit_board; // I honistly have no idea
 
     // fill this buffer with the requested processable size
@@ -68,16 +72,8 @@ typedef struct ws_cliant_con_ {
 
     ws_state* state;
     // TODO: abstract data expecter thingy with function pointers and custom state in it
-    
-
-    ws_state* state
-
 
 } ws_cliant_con;
-
-typedef err_t (*tcp_recv_fn)(ws_client_state *arg, struct tcp_pcb *tpcb,
-                             struct pbuf *p, err_t err);
-
 
 typedef struct ws_state_header_ {
     ws_state state;
@@ -196,18 +192,42 @@ int ws_consume(ws_cliant_con* cli_con, size_t size) {
     return ERR_OK;
 }
 
+static err_t tcp_server_result(void *arg, int status) {
+    ws_cliant_con* cli_con = (ws_cliant_con*)arg;
+    if (status == 0) {
+        DEBUG_printf("test success\n");
+    } else {
+        DEBUG_printf("test failed %d\n", status);
+    }
+    
+    err_t err = ERR_OK;
+    if (cli_con->printed_circuit_board != NULL) {
+        tcp_arg(cli_con->printed_circuit_board, NULL);
+        tcp_poll(cli_con->printed_circuit_board, NULL, 0);
+        tcp_sent(cli_con->printed_circuit_board, NULL);
+        tcp_recv(cli_con->printed_circuit_board, NULL);
+        tcp_err(cli_con->printed_circuit_board, NULL);
+        err = tcp_close(cli_con->printed_circuit_board);
+        if (err != ERR_OK) {
+            DEBUG_printf("close failed %d, calling abort\n", err);
+            tcp_abort(cli_con->printed_circuit_board);
+            err = ERR_ABRT;
+        }
+        cli_con->printed_circuit_board = NULL;
+    }
+    //TODO: move server deconstruction to its own function/struct
+    if (cli_con->server_pcb) {
+        tcp_arg(cli_con->server_pcb, NULL);
+        tcp_close(cli_con->server_pcb);
+        cli_con->server_pcb = NULL;
+    }
+    return err;
+}
+
 static err_t tcp_server_sent(void* arg, struct tcp_pcb* tpcb, u16_t len) {
-    ws_cliant_con_t* state = (ws_cliant_con_t*)arg;
+    ws_cliant_con* state = (ws_cliant_con*)arg;
 
     printf("tcp_server_sent %u\n", len);
-    state->sent_len += len;
-
-    if (state->sent_len >= BUF_SIZE) {
-
-        // We should get the data back from the client
-        state->recv_len = 0;
-        DEBUG_printf("Waiting for buffer from client\n");
-    }
 
     return ERR_OK;
 }
@@ -215,6 +235,7 @@ static err_t tcp_server_sent(void* arg, struct tcp_pcb* tpcb, u16_t len) {
 err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) {
     ws_cliant_con* cli_con = (ws_cliant_con*)arg;
     if (!p) {
+        // cliant closed the connection
         return tcp_server_result(arg, -1);
     }
     // this method is callback from lwIP, so cyw43_arch_lwip_begin is not required, however you
@@ -226,25 +247,29 @@ err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
         return ERR_OK;
     }
 
-    DEBUG_printf("tcp_server_recv %d/%d err %d\n", p->tot_len, state->recv_len, err);
+    DEBUG_printf("tcp_server_recv %d err %d\n", p->tot_len, err);
 
     cli_con->p_current = p;
 
     // READ STUFF until we run out of bytes
     if (!cli_con->state) {
-        cli_con->state = malloc(sizeof(ws_state_header)));
-        memset(cli_con->state, 0);
-        cli_con->state = WS_STATE_HEADER;
-        ws_state_header* state_h = cli_con->state;
+        ws_state_header* state_h = malloc(sizeof(ws_state_header));
+        memset(state_h, 0, sizeof(ws_state_header));
+        state_h->state.state = WS_STATE_HEADER;
+
         bl_str_reset(&state_h->tag_finder, WS_H_FIELDS, WS_H_FIELDS_LEN);
+
+        cli_con->state = (ws_state_header*) state_h;
     }
     char* buffer;
     int len;
     int i;
-    while (true) {}
+    while (true) {
+        ws_state_header* state_h;
+        int skip;
         switch (cli_con->state->state) {
             case WS_STATE_HEADER:
-                ws_state_header* state_h = cli_con->state;
+                state_h = (ws_state_header*) cli_con->state;
                 len = ws_peak(cli_con, &buffer);
                 if (!len) {
                     goto no_more_bytes;
@@ -256,13 +281,14 @@ err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
                 if (i < len) {
                     switch (selected) {
                         case WS_H_FIELD_UPGRADE:
-                            state_h->state = WS_STATE_CHECK_UPGRADE;
+                            state_h->state.state = WS_STATE_CHECK_UPGRADE;
                             state_h->sub_state = 1;
-                            bl_str_reset(&state_h->tag_finder, &"websocket", 1);
+                            const char* str = "websocket";
+                            bl_str_reset(&state_h->tag_finder, &str, 1);
                             break;
 
                         case WS_H_FIELD_KEY:
-                            state_h->state = WS_STATE_HEADER_KEY;
+                            state_h->state.state = WS_STATE_HEADER_KEY;
                             state_h->sub_state = 1;
                             break;
 
@@ -275,13 +301,13 @@ err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
                 break;
 
             case WS_STATE_CHECK_UPGRADE:
-                state_h = cli_con->state;
+                state_h = (ws_state_header*) cli_con->state;
                 len = ws_peak(cli_con, &buffer);
                 if (!len) {
                     goto no_more_bytes;
                 }
 
-                int skip = 0;
+                skip = 0;
                 if (state_h->sub_state) {
                     for (i = 0; i < len &&
                             buffer[i] != '\r' &&
@@ -294,25 +320,26 @@ err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
                             break;
                         }
                     }
-                }
+                } // else
+                // FIXME: i is not set to the end of the string when sub_state is 0
                 selected = bl_str_select(&state_h->tag_finder, buffer + skip, i - skip);
                 if (i < len) {
                     if (selected == 0) { // we found 'websocket'
-                        cli_con->found_upgrade = 1;
+                        state_h->found_upgrade = 1;
                     }
                     // ---> eat end lines and whitespace
-                    state_h->state = WS_STATE_EAT_WHITESPACE;
+                    state_h->state.state = WS_STATE_EAT_WHITESPACE;
                 }
                 ws_consume(cli_con, i);
                 break;
             case WS_STATE_HEADER_KEY:
-                state_h = cli_con->state;
+                state_h = (ws_state_header*) cli_con->state;
                 len = ws_peak(cli_con, &buffer);
                 if (!len) {
                     goto no_more_bytes;
                 }
 
-                int skip = 0;
+                skip = 0;
                 if (state_h->sub_state) {
                     for (i = 0; i < len &&
                             buffer[i] != '\r' &&
@@ -330,7 +357,7 @@ err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
                 ws_consume(cli_con, i);
                 break;
             case WS_STATE_EAT_WHITESPACE:
-                state_h = cli_con->state;
+                state_h = (ws_state_header*) cli_con->state;
                 len = ws_peak(cli_con, &buffer);
                 if (!len) {
                     goto no_more_bytes;
@@ -353,10 +380,12 @@ err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
                     }
                 }
                 if (endl_count >= 2){
-                    ws_parse_header(cli_con);
+                    // TODO: parse header
+                    //ws_parse_header(cli_con);
+                    printf("reading header complete.\n");
                 } else if (i < len) {
                     // ---> go back to header scanning
-                    state_h->state = WS_STATE_HEADER;
+                    state_h->state.state = WS_STATE_HEADER;
                     bl_str_reset(&state_h->tag_finder, WS_H_FIELDS, WS_H_FIELDS_LEN);
                 }
                 ws_consume(cli_con, i); // nom nom nom
@@ -372,33 +401,6 @@ err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
     tcp_recved(tpcb, cli_con->recved_current);
     cli_con->recved_current = 0;
 
-    // Receive the buffer
-    const uint16_t buffer_left = BUF_SIZE - state->recv_len;
-    state->recv_len += pbuf_copy_partial(p, state->buffer_recv + state->recv_len,
-                                             p->tot_len > buffer_left ? buffer_left : p->tot_len, 0);
-
-    // \/ SCRAP CODE \/
-
-    // Have we have received the whole buffer
-    if (state->recv_len == BUF_SIZE) {
-
-        // check it matches
-        if (memcmp(state->buffer_sent, state->buffer_recv, BUF_SIZE) != 0) {
-            DEBUG_printf("buffer mismatch\n");
-            return tcp_server_result(arg, -1);
-        }
-        DEBUG_printf("tcp_server_recv buffer ok\n");
-
-        // Test complete?
-        state->run_count++;
-        if (state->run_count >= TEST_ITERATIONS) {
-            tcp_server_result(arg, 0);
-            return ERR_OK;
-        }
-
-        // Send another buffer
-        return tcp_server_send_data(arg, state->client_pcb);
-    }
     return ERR_OK;
 }
 
@@ -419,7 +421,7 @@ static void tcp_server_err(void *arg, err_t err) {
 
 // goes in ---> tcp_accept()
 static err_t tcp_server_accept(void *arg, struct tcp_pcb *client_pcb, err_t err) {
-    TCP_SERVER_T *state = (TCP_SERVER_T*)arg;
+    ws_cliant_con* cli_con = (ws_cliant_con*)arg;
     if (err != ERR_OK || client_pcb == NULL) {
         DEBUG_printf("Failure in accept\n");
         tcp_server_result(arg, err);
@@ -427,16 +429,62 @@ static err_t tcp_server_accept(void *arg, struct tcp_pcb *client_pcb, err_t err)
     }
     DEBUG_printf("Client connected\n");
 
-    state->client_pcb = client_pcb;
-    tcp_arg(client_pcb, state);
+    cli_con->printed_circuit_board = client_pcb;
+    tcp_arg(client_pcb, cli_con);
     tcp_sent(client_pcb, tcp_server_sent);
     tcp_recv(client_pcb, tcp_server_recv);
-    tcp_poll(client_pcb, tcp_server_poll, POLL_TIME_S * 2);
+    tcp_poll(client_pcb, tcp_server_poll, 10);
     tcp_err(client_pcb, tcp_server_err);
 
-    return tcp_server_send_data(arg, state->client_pcb);
+    //return tcp_server_send_data(arg, cli_con->printed_circuit_board);
+    return ERR_OK;
 }
 
+// ================ MAIN FUNCTIONS ================
+
+static bool tcp_server_open(ws_cliant_con* cli_con) {
+    DEBUG_printf("Starting server at %s on port %u\n", ip4addr_ntoa(netif_ip4_addr(netif_list)), TCP_PORT);
+
+    struct tcp_pcb *pcb = tcp_new_ip_type(IPADDR_TYPE_ANY);
+    if (!pcb) {
+        DEBUG_printf("failed to create pcb\n");
+        return false;
+    }
+
+    err_t err = tcp_bind(pcb, NULL, TCP_PORT);
+    if (err) {
+        DEBUG_printf("failed to bind to port %u\n", TCP_PORT);
+        return false;
+    }
+
+    cli_con->server_pcb = tcp_listen_with_backlog(pcb, 1);
+    if (!cli_con->server_pcb) {
+        DEBUG_printf("failed to listen\n");
+        if (pcb) {
+            tcp_close(pcb);
+        }
+        return false;
+    }
+
+    tcp_arg(cli_con->server_pcb, cli_con);
+    tcp_accept(cli_con->server_pcb, tcp_server_accept);
+
+    return true;
+}
+
+void run_tcp_server_test() {
+    // TODO: use a server struct and allocate this later?
+    ws_cliant_con* cli_con = calloc(1, sizeof(ws_cliant_con));
+    if (!cli_con) {
+        return;
+    }
+
+    if (!tcp_server_open(cli_con)) {
+        tcp_server_result(cli_con, -1);
+        return;
+    }
+    // TODO: deallocate ws_cliant_con later
+}
 
 int main() {
     //const uint LED_PIN = PICO_DEFAULT_LED_PIN;
@@ -464,7 +512,7 @@ int main() {
     int status;
     do {
         //poll for now, TODO: use netif_set_status_callback();
-        int status = cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA);
+        status = cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA);
         int ms = to_ms_since_boot(get_absolute_time());
         
         int rate = 500;
@@ -507,32 +555,56 @@ int main() {
             printf("Link status changed to: %s\n", cyw43_tcpip_link_status_name(status));
         }
         status_old = status;
-        cyw43_arch_poll();
-    } while (status != CYW43_LINK_UP);
+        //cyw43_arch_poll();
+    } while (status != 3);
 
-    printf("Connected\n");
+    printf("Connected to wifi with IP: %s\n", ip4addr_ntoa(netif_ip4_addr(cyw43_state.netif)));
+
 
     //socket();
 
     //httpd_init();
+
+    run_tcp_server_test();
     
     while (true) {
 
         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
-        printf("1");
 
-        sleep_ms(250);
+#if PICO_CYW43_ARCH_POLL
+        // if you are using pico_cyw43_arch_poll, then you must poll periodically from your
+        // main loop (not from a timer) to check for Wi-Fi driver or lwIP work that needs to be done.
+        cyw43_arch_poll();
+        // you can poll as often as you like, however if you have nothing else to do you can
+        // choose to sleep until either a specified time, or cyw43_arch_poll() has work to do:
+        cyw43_arch_wait_for_work_until(make_timeout_time_ms(100));
+#else
+        // if you are not using pico_cyw43_arch_poll, then WiFI driver and lwIP work
+        // is done via interrupt in the background. This sleep is just an example of some (blocking)
+        // work you might be doing.
+        sleep_ms(100);
+#endif
+
 
         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
-        printf("0");
 
-        sleep_ms(250);
+#if PICO_CYW43_ARCH_POLL
+        // if you are using pico_cyw43_arch_poll, then you must poll periodically from your
+        // main loop (not from a timer) to check for Wi-Fi driver or lwIP work that needs to be done.
+        cyw43_arch_poll();
+        // you can poll as often as you like, however if you have nothing else to do you can
+        // choose to sleep until either a specified time, or cyw43_arch_poll() has work to do:
+        cyw43_arch_wait_for_work_until(make_timeout_time_ms(100));
+#else
+        // if you are not using pico_cyw43_arch_poll, then WiFI driver and lwIP work
+        // is done via interrupt in the background. This sleep is just an example of some (blocking)
+        // work you might be doing.
+        sleep_ms(100);
+#endif
 
-        if (cyw43_wifi_link_status(&cyw43_state, CYW43_ITF_STA) != CYW43_LINK_JOIN) {
-            sleep_ms(1000);
-        }
-
-
+        // TODO: What happens if the wifi link goes down? will the server/connections error out?
+        // should we check and re-initialize it?
     }
+    cyw43_arch_deinit();
 }
 
