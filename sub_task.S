@@ -33,14 +33,20 @@ sub_task_run:
     mov r7, r11
     push {r4-r7}
 
-    // TODO: ||||| --> [|||]
+    //       ||||| --> [|||]
     //       temp = sub_task->sp
     //       Save our current SP to sub_task->sp
     //       Set SP to temp
+    ldr r3, [r0]
+    mov r4, sp      // using r4 is ok because we restore high-registers anyway.
+    str r4, [r0]
+    mov sp, r3
+
 
     // TODO: If task_function != null
     //             Call task_function
     //       else
+    //             restore high-registers from stack
     //             set w0 to args
     //             pop PC from stack
     //             sub_task_yield will handle it from here
@@ -69,10 +75,14 @@ sub_task_run:
     //
     //      w0 holds sub_task_yield's pre_ret_code or task_function()'s return code
 
-    // TODO: [|||] --> |||||
+    //       [|||] --> |||||
     //       temp = sub_task->sp
     //       Save our current SP to sub_task->sp
     //       Set SP to temp
+    ldr r3, [r0]
+    mov r4, sp      // using r4 is ok because we restore high-registers anyway.
+    str r4, [r0]
+    mov sp, r3
 
     // Restore the high-registers off the current (main) stack
     // Restore link register
