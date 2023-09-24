@@ -8,6 +8,7 @@
 #include "lwip/tcp.h"
 
 #include "bufferless_str.h"
+#include "sub_task.h"
 
 #include "mbedtls/sha1.h"
 
@@ -259,7 +260,7 @@ err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
 
         bl_str_reset(&state_h->tag_finder, WS_H_FIELDS, WS_H_FIELDS_LEN);
 
-        cli_con->state = (ws_state_header*) state_h;
+        cli_con->state = (ws_state*) state_h;
     }
     char* buffer;
     int len;
@@ -486,11 +487,17 @@ void run_tcp_server_test() {
     // TODO: deallocate ws_cliant_con later
 }
 
+size_t thingy_func(struct sub_task* fake, void* args) {
+    printf("Wi-Fi init failed\n");
+}
+
 int main() {
     //const uint LED_PIN = PICO_DEFAULT_LED_PIN;
     //gpio_init(LED_PIN);
     //gpio_set_dir(LED_PIN, GPIO_OUT);
     stdio_init_all();
+
+    sub_task_run(NULL, thingy_func, NULL);
 
     if (cyw43_arch_init_with_country(CYW43_COUNTRY_USA)) {
         printf("Wi-Fi init failed\n");

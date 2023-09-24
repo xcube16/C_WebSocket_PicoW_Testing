@@ -18,7 +18,7 @@ struct sub_task {
  * @param args Put data in here ...
  * @return size_t
  */
-size_t sub_task_run(sub_task* task, size_t (*task_function)(sub_task*, void*), void* args);
+size_t sub_task_run(struct sub_task* task, size_t (*task_function)(struct sub_task*, void*), void* args);
 
 /**
  * @brief Yield to the colling procedure. Maybe we will have more data when we continue.
@@ -29,6 +29,6 @@ size_t sub_task_run(sub_task* task, size_t (*task_function)(sub_task*, void*), v
  * @param current_task The current task.
  * @return void* ... and the data comes out here!
  */
-void* sub_task_yield(size_t pre_ret_code, sub_task* current_task);
+void* sub_task_yield(size_t pre_ret_code, struct sub_task* current_task);
 
 #endif

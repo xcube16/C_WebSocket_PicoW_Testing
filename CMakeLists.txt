@@ -4,7 +4,7 @@ set(PICO_BOARD pico_w)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
-add_compile_options(-save-temps=obj)
+#add_compile_options(-save-temps=obj)
 
 # Pull in SDK (must be before project)
 include(pico_sdk_import.cmake)
