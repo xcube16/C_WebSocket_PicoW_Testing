@@ -43,28 +43,33 @@ sub_task_run:
     str r4, [r0]
     mov sp, r3
 
+    cmp r1, #0
+    be sub_task_run_task_null
+    // If task_function != null
+                    mov r5, r0   // Save sub_stask* for after the task_function returns
+                    mov r3, r1
+                    mov r1, r2   // ready args
+                    blx r3       // Call task_function!
 
-    // TODO: If task_function != null
-    //              TODO: Call task_function!
+                    // >>>===== Task RUNS =====>>>
 
-    //              >>>===== Task RUNS =====>>>
+                    // task_function returned
 
-    //              task_function returned
-
-    //              [Task] --> |Main|
-                    ldr r3, [r0]    // r3 = sub_task->sp
+                    // [Task] --> |Main|
+                    ldr r3, [r5]    // r3 = sub_task->sp
                     mov r4, sp      // using r4 is ok because we restore high-registers anyway.
-                    str r4, [r0]
+                    str r4, [r5]
                     mov sp, r3
 
-                    // Pop PC from stack ---> basically a no-op as of now (goes to sub_task_run_resume)
+                    // Pop PC from stack ---> basically goes to sub_task_run_resume
                     pop {pc}
 
     // else
+    sub_task_run_task_null:
                     // Resume Task from yield!
 
-                    mov w0, w2      // Set w0 to args
-    //              Restore high-registers from stack (task)
+                    mov r0, r2      // Set r0 to args
+                    // Restore high-registers from stack (task)
                     pop {r4-r7}     /* Load the low registers.  */
                     mov r4, r8      /* Load the high registers. */
                     mov r5, r9
@@ -72,7 +77,7 @@ sub_task_run:
                     mov r7, r11
                     pop {r4-r7, pc} // PC from stack ---> sub_task_yield will handle it from here
 
-    //              >>>===== Task RUNS =====>>>
+                    // >>>===== Task RUNS =====>>>
 
     sub_task_run_resume:
 
@@ -128,9 +133,9 @@ sub_task_yield:
     push {r3}
 
     // [Task] --> |Main|
-    ldr r3, [r0]    // r3 = sub_task->sp
+    ldr r3, [r1]    // r3 = sub_task->sp
     mov r4, sp      // using r4 is ok because we restore high-registers anyway.
-    str r4, [r0]
+    str r4, [r1]
     mov sp, r3
 
     // Pop PC from stack ---> sub_task_run will handle it from here

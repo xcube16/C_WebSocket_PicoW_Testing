@@ -488,7 +488,16 @@ void run_tcp_server_test() {
 }
 
 size_t thingy_func(struct sub_task* fake, void* args) {
-    printf("Wi-Fi init failed\n");
+    printf("Wi-Fi init\n");
+}
+
+size_t sub_task_fake(
+    struct sub_task* task,
+    size_t (*task_function)(struct sub_task*, void*),
+    void* args) {
+    
+    printf("Wi-Fi\n");
+    task_function(NULL, NULL);
 }
 
 int main() {
@@ -497,7 +506,8 @@ int main() {
     //gpio_set_dir(LED_PIN, GPIO_OUT);
     stdio_init_all();
 
-    sub_task_run(NULL, thingy_func, NULL);
+    sub_task_fake(NULL, thingy_func, NULL);
+    
 
     if (cyw43_arch_init_with_country(CYW43_COUNTRY_USA)) {
         printf("Wi-Fi init failed\n");
