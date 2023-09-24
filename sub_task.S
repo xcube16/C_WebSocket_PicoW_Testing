@@ -24,8 +24,14 @@ sub_task_run:
     // r2 void* args  <--- shove this into -- ^
     //                     or into the sub_task_yield's return
 
-    // TODO: save link register
-    // TODO: save high registers onto current (main) stack
+    // save link register
+    // save high registers onto current (main) stack
+    push {r4-r7, lr}   /* Store the low registers.  */
+    mov r4, r8         /* Store the high registers. */
+    mov r5, r9
+    mov r6, r10
+    mov r7, r11
+    push {r4-r7}
 
     // TODO: ||||| --> [|||]
     //       temp = sub_task->sp
@@ -68,11 +74,16 @@ sub_task_run:
     //       Save our current SP to sub_task->sp
     //       Set SP to temp
 
-    // TODO: Restore the high-registers off the current (main) stack
-    // TODO: Restore link register
+    // Restore the high-registers off the current (main) stack
+    // Restore link register
+    pop {r4-r7, lr} /* Load the low registers.  */
+    mov r4, r8      /* Load the high registers. */
+    mov r5, r9
+    mov r6, r10
+    mov r7, r11
+    pop {r4-r7, lr}
 
     bx lr
-
 
 
 .global main                        // Hay linker, here is a function thing!
