@@ -1,17 +1,10 @@
 
 /*
- * CONSTANTS
+ * RP2040 (Cortex M0+) Sub-task assembly functions. 'Now you are thinking with context switching!'
  */
-.equ    THINGY,        25
 
+.syntax unified       // ARM unified syntax, ie.
 
-/*
- * ASSEMBLY HEADER
- *
- * NOTE These macros need to be on separate lines
- */
-.syntax unified                     // Use ARM unified syntax, ie.
-                                    // mandate S suffix for lo registers
 .cpu cortex-m0plus
 .thumb
 
