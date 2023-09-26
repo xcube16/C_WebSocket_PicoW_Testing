@@ -13,6 +13,8 @@ struct sub_task {
  * @brief Run or resume a subtask. It's like a thread. Use sub_task_yield to pause, pre-return data,
  * and have new data when resumed.
  * 
+ *  TODO: How TF does the caller know when the task is done!?!??!?!?
+ * 
  * @param task 
  * @param task_function task function pointer or null for resume
  * @param args Put data in here ...

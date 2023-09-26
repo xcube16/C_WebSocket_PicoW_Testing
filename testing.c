@@ -487,17 +487,18 @@ void run_tcp_server_test() {
     // TODO: deallocate ws_cliant_con later
 }
 
-size_t thingy_func(struct sub_task* fake, void* args) {
-    printf("Wi-Fi init\n");
-}
+size_t thingy_task(struct sub_task* task, void* args) {
+    printf("Lets print some stuff: %s\n", (char*) args);
+    args = sub_task_yield(3, task);
+    printf("More stuff: %s\n", (char*) args);
 
-size_t sub_task_fake(
-    struct sub_task* task,
-    size_t (*task_function)(struct sub_task*, void*),
-    void* args) {
-    
-    printf("Wi-Fi\n");
-    task_function(NULL, NULL);
+    int i;
+    for (i = 0; i < 10; i++) {
+        printf("Ineration %d, Number: 0x%X\n", i, (size_t) sub_task_yield(4, task));
+    }
+
+    printf("Hello World\n");
+    return 42;
 }
 
 int main() {
@@ -506,8 +507,29 @@ int main() {
     //gpio_set_dir(LED_PIN, GPIO_OUT);
     stdio_init_all();
 
-    sub_task_fake(NULL, thingy_func, NULL);
+    struct sub_task the_task;
+    printf("size: %u, pointer: %p %p\n", sizeof(the_task.stack), &(the_task.stack),
+    sizeof(the_task.stack) + (void*) &(the_task.stack));
+    the_task.stack_ptr = ((void*) &(the_task.stack)) + sizeof(the_task.stack);
+
+    void* args = (void*) &"The first args";
+    void* pre_ret = sub_task_run(&the_task, thingy_task, args);
     
+    while (1) {
+        switch ((size_t) pre_ret) {
+            case 3:
+                args = (void*) &"Another string";
+                break;
+            case 4:
+                args = (void*) 0xABCDEF;
+                break; 
+            default:
+                printf("Done: %d\n", (size_t) pre_ret);
+                goto yeet;
+        }
+        pre_ret = sub_task_run(&the_task, NULL, args);
+    }
+    yeet:
 
     if (cyw43_arch_init_with_country(CYW43_COUNTRY_USA)) {
         printf("Wi-Fi init failed\n");

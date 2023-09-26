@@ -44,7 +44,7 @@ sub_task_run:
     mov sp, r3
 
     cmp r1, #0
-    be sub_task_run_task_null
+    beq sub_task_run_task_null
     // If task_function != null
                     mov r5, r0   // Save sub_stask* for after the task_function returns
                     mov r3, r1
@@ -61,21 +61,17 @@ sub_task_run:
                     str r4, [r5]
                     mov sp, r3
 
-                    // Pop PC from stack ---> basically goes to sub_task_run_resume
-                    pop {pc}
+                    pop {r5}    // Pop PC from stack ---> basically goes to sub_task_run_resume
+                    mov pc, r5  // TODO: FIXME: Why can't we do pop {pc} ?!?!
 
     // else
     sub_task_run_task_null:
                     // Resume Task from yield!
 
-                    mov r0, r2      // Set r0 to args
-                    // Restore high-registers from stack (task)
-                    pop {r4-r7}     /* Load the low registers.  */
-                    mov r4, r8      /* Load the high registers. */
-                    mov r5, r9
-                    mov r6, r10
-                    mov r7, r11
-                    pop {r4-r7, pc} // PC from stack ---> sub_task_yield will handle it from here
+                    mov r0, r2  // ready args
+
+                    pop {r5}    // Pop PC from stack ---> sub_task_yield will handle it from here
+                    mov pc, r5  // TODO: FIXME: Why can't we do pop {pc} ?!?!
 
                     // >>>===== Task RUNS =====>>>
 
@@ -138,12 +134,12 @@ sub_task_yield:
     str r4, [r1]
     mov sp, r3
 
-    // Pop PC from stack ---> sub_task_run will handle it from here
-    pop {pc}
+    pop {r5}    // Pop PC from stack ---> sub_task_run will handle it from here
+    mov pc, r5  // TODO: FIXME: Why can't we do pop {pc} ?!?!
 
     // >>>===== Main RUNS =====>>>
 
-    sub_task_yield_resume:
+    sub_task_yield_resume: // w0 holds void* args
     // Restore the high-registers off the current (task) stack
     pop {r4-r7}     /* Load the low registers.  */
     mov r4, r8      /* Load the high registers. */
