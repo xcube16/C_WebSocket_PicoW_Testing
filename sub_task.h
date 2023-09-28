@@ -6,8 +6,10 @@
 
 struct sub_task {
     void* stack_ptr;
-    char stack[1020];
+    char stack[];
 };
+
+//#define IM_A_STACK_ON_THE_STACK(size,)
 
 /**
  * @brief Run or resume a subtask. It's like a thread. Use sub_task_yield to pause, pre-return data,

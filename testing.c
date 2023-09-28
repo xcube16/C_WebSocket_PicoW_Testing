@@ -507,13 +507,13 @@ int main() {
     //gpio_set_dir(LED_PIN, GPIO_OUT);
     stdio_init_all();
 
-    struct sub_task the_task;
-    printf("size: %u, pointer: %p %p\n", sizeof(the_task.stack), &(the_task.stack),
-    sizeof(the_task.stack) + (void*) &(the_task.stack));
-    the_task.stack_ptr = ((void*) &(the_task.stack)) + sizeof(the_task.stack);
+    char _stack_this_shit[1020 + sizeof(struct sub_task)];
+    struct sub_task* the_task = (struct sub_task*) _stack_this_shit;
+    the_task->stack_ptr = (void*) the_task + 1020 + sizeof(struct sub_task);
 
     void* args = (void*) &"The first args";
-    void* pre_ret = sub_task_run(&the_task, thingy_task, args);
+    printf("function pointer %p\n", thingy_task);
+    size_t pre_ret = sub_task_run(the_task, thingy_task, args);
     
     while (1) {
         switch ((size_t) pre_ret) {
@@ -527,10 +527,11 @@ int main() {
                 printf("Done: %d\n", (size_t) pre_ret);
                 goto yeet;
         }
-        pre_ret = sub_task_run(&the_task, NULL, args);
+        pre_ret = sub_task_run(the_task, NULL, args);
     }
     yeet:
-
+    return 0;
+    /*
     if (cyw43_arch_init_with_country(CYW43_COUNTRY_USA)) {
         printf("Wi-Fi init failed\n");
         return -1;
@@ -644,6 +645,6 @@ int main() {
         // TODO: What happens if the wifi link goes down? will the server/connections error out?
         // should we check and re-initialize it?
     }
-    cyw43_arch_deinit();
+    cyw43_arch_deinit();*/
 }
 
