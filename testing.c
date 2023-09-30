@@ -501,15 +501,15 @@ size_t thingy_task(struct sub_task* task, void* args) {
     return 42;
 }
 
+SUB_TASK_GLOBAL(the_task, 1020)
+
 int main() {
     //const uint LED_PIN = PICO_DEFAULT_LED_PIN;
     //gpio_init(LED_PIN);
     //gpio_set_dir(LED_PIN, GPIO_OUT);
     stdio_init_all();
 
-    char _stack_this_shit[1020 + sizeof(struct sub_task)];
-    struct sub_task* the_task = (struct sub_task*) _stack_this_shit;
-    the_task->stack_ptr = (void*) the_task + 1020 + sizeof(struct sub_task);
+    SUB_TASK_GLOBAL_INIT(the_task)
 
     void* args = (void*) &"The first args";
     printf("function pointer %p\n", thingy_task);

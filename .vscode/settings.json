@@ -32,6 +32,9 @@
         "bufferless_str.h": "c",
         "sha1.h": "c",
         "stats.h": "c",
-        "config.h": "c"
+        "config.h": "c",
+        "stddef.h": "c",
+        "typeinfo": "c",
+        "memp_std.h": "c"
     }
 }
