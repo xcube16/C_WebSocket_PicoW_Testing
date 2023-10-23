@@ -39,7 +39,18 @@ const char wifi_ssid[] = "placeholder";
 const char wifi_password[] = "placeholder";
 #define TCP_PORT 8080
 
+const char ws_responce1[] =
+    "HTTP/1.1 101 Switching Protocols\r\n"
+    "Upgrade: websocket\r\n"
+    "Connection: Upgrade\r\n"
+    "Sec-WebSocket-Accept: ";
+
+const char ws_responce2[] =
+    "\r\nSec-WebSocket-Protocol: chat\r\n\r\n";
+
 // ================ CLIANT CONNECTION ================
+
+SUB_TASK_GLOBAL(task_ws_header, 1020);
 
 #define WS_STATE_HEADER 1
 #define WS_STATE_HEADER_KEY 2
@@ -74,6 +85,8 @@ typedef struct ws_cliant_con_ {
     ws_state* state;
     // TODO: abstract data expecter thingy with function pointers and custom state in it
 
+    sub_task* task;
+
 } ws_cliant_con;
 
 typedef struct ws_state_header_ {
@@ -87,6 +100,7 @@ typedef struct ws_state_header_ {
 
 } ws_state_header;
 
+// normal helper functions
 
 /**
  * @brief Returns a condiguious byte array of the given size or null if we need to wait for more data.
@@ -148,7 +162,7 @@ char* ws_read(ws_cliant_con* cli_con, size_t size) {
  * actually advance the communication.
  * 
  * @param cli_con 
- * @param buf_ptr Pointer to a buffer. Will be set of the number of bytes is > 0
+ * @param buf_ptr Pointer to a buffer. Will be set if the number of bytes is > 0
  * @return size_t Number of bytes available
  */
 size_t ws_peak(ws_cliant_con* cli_con, char** buf_ptr) {
@@ -192,6 +206,193 @@ int ws_consume(ws_cliant_con* cli_con, size_t size) {
     cli_con->recved_current += size;
     return ERR_OK;
 }
+
+// end normal helper functions
+
+// threaded helper functions
+
+/**
+ * @brief Returns a condiguious byte array of the given size by yielding when more is needed.
+ * 
+ * @param cli_con 
+ * @param size 
+ * @return char* 
+ */
+char* ws_t_read(ws_cliant_con* cli_con, size_t size) {
+    char* ret;
+    while (!(ret = ws_read(cli_con, size))) {
+        sub_task_yield(1, cli_con->task);
+    }
+    return ret;
+}
+
+/**
+ * @brief Provides access to the next raw pbuf payload. Call ws_consume() or ws_read() to
+ * actually advance the communication. Threaded, yielding.
+ * 
+ * @param cli_con 
+ * @param buf_ptr Pointer to a buffer. Will be set if the number of bytes is > 0
+ * @return size_t Number of bytes available
+ */
+size_t ws_t_peak(ws_cliant_con* cli_con, char** buf_ptr) {
+    size_t ret;
+    while (!(ret = ws_peak(cli_con, buf_ptr))) {
+        sub_task_yield(1, cli_con->task);
+    }
+    return ret;
+}
+
+/**
+ * @brief Eats ':', ' ', sneezes when it hits a '\n' (returns 1), and returns 0 for any other char.
+ * 
+ * @param cli_con 
+ * @return int 0 for non-whitespace, 1 for '\n'
+ */
+int ws_eat_whitespace(ws_cliant_con* cli_con) {
+    char* buf;
+    size_t size;
+    do {
+        size = ws_t_peak(cli_con, &buf);
+        int i;
+        for (i = 0; i < size; i++) {
+            char c = buf[i];
+            if (c != ':' && c != ' ' && c != '\r') {
+                ws_consume(cli_con, i + (c == '\n'));
+                return c == '\n';
+            }
+        }
+        ws_consume(cli_con, i);
+    } while (true);
+}
+
+// end threaded helper functions
+
+int ws_confirm_tag(ws_cliant_con* cli_con, char* tag) {
+    int i;
+    char* buf;
+    size_t len;
+    size_t tlen = 0;
+
+    int ret;
+
+    while(true) {
+        len = ws_t_peak(cli_con, &buf);
+
+        for (i = 0; i < len; i++) {
+            if (tag[i] == '\0') {
+                // Reached the end of tag.
+                // We also need to make sure that we consume the entire line
+                // even if it did not match the tag.
+
+                if (buf[i] == '\r') {
+                    ws_consume(cli_con, i);
+                    return true; // They are equal
+                } else {
+                    ws_consume(cli_con, i + 1);
+                    goto consume_line;
+                }
+            }
+            if (buf[i] != tag[i]) {
+                ws_consume(cli_con, i);
+                goto consume_line;
+            }
+        }
+
+        tag += len; // advance the tag pointer
+        ws_consume(cli_con, len);
+    }
+
+    consume_line:
+    while(true) {
+        len = ws_t_peak(cli_con, &buf);
+
+        for (i = 0; i < len; i++) {
+            if (buf[i] == '\r') {
+                ws_consume(cli_con, i); // consume everything before '\r'
+                return false;
+            }
+        }
+        ws_consume(cli_con, len);
+    }
+}
+
+size_t do_ws_header(sub_task* task, void* args) {
+    ws_cliant_con* cli_con = (ws_cliant_con*) args;
+
+    ws_state_header state_h;
+    
+    cli_con->state = (ws_state*) &state_h;
+
+    bool websocket_upgrade = false;
+
+    // Read the header
+    while (true) { // break when we hit a double end line? (\r\n\r\n)
+
+        int i;
+        char* buffer;
+        int len;
+        int selected;
+
+        char wsKey[16];
+
+        bl_str_reset(&state_h.tag_finder, WS_H_FIELDS, WS_H_FIELDS_LEN);
+
+        do {
+            len = ws_t_peak(cli_con, &buffer); // *grab*
+
+            // *inspect*
+            for (i = 0; i < len && buffer[i] != ':'; i++) {
+                if (buffer[i] == '\n') {
+                    // END OF HEADER DETECTED!!!!
+                    ws_consume(cli_con, i + 1);
+                    goto header_done;
+                } 
+            }
+            selected = bl_str_select(&state_h.tag_finder, buffer, i);
+
+            ws_consume(cli_con, i); // *munch!*
+
+        } while(i == len); // If i == len, we have read part of the string, but have not hit the ':' yet
+        
+        if (ws_eat_whitespace(cli_con)) {
+            DEBUG_printf("Unexpected line end.\n");
+        }
+
+        switch (selected) {
+            case WS_H_FIELD_UPGRADE:
+                
+                if (ws_confirm_tag(cli_con, "websocket")) {
+                    websocket_upgrade = true;
+                } else {
+                    DEBUG_printf("Error, thats not websocket.\n");
+                }
+                break;
+
+            case WS_H_FIELD_KEY:
+                state_h.sub_state = 1;
+
+                base64_ctx ctx;
+                buffer = ws_t_read(cli_con, 24);
+                decode_base64(&ctx, buffer, wsKey, false);
+                
+                // TODO: read the key
+                break;
+
+            case BL_STR_NO_MATCH:
+            case BL_STR_NO_MATCH_YET:
+                break;
+        }
+    }
+    header_done:
+
+    tcp_write(cli_con->printed_circuit_board, ws_responce1, sizeof(ws_responce1) - 1, 0);
+    encode
+    tcp_write(cli_con->printed_circuit_board, ws_responce2, sizeof(ws_responce2) - 1, 0);
+
+}
+
+// ============= YUCK YUCK YUCK!!!! =============
+// TODO: REFACTOR!!!!!!!!!!!!!!
 
 static err_t tcp_server_result(void *arg, int status) {
     ws_cliant_con* cli_con = (ws_cliant_con*)arg;
@@ -252,151 +453,9 @@ err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
 
     cli_con->p_current = p;
 
-    // READ STUFF until we run out of bytes
-    if (!cli_con->state) {
-        ws_state_header* state_h = malloc(sizeof(ws_state_header));
-        memset(state_h, 0, sizeof(ws_state_header));
-        state_h->state.state = WS_STATE_HEADER;
-
-        bl_str_reset(&state_h->tag_finder, WS_H_FIELDS, WS_H_FIELDS_LEN);
-
-        cli_con->state = (ws_state*) state_h;
+    if (!sub_task_continue(cli_con->task, cli_con)) {
+        DEBUG_printf("Done reading WS Header.\n");
     }
-    char* buffer;
-    int len;
-    int i;
-    while (true) {
-        ws_state_header* state_h;
-        int skip;
-        switch (cli_con->state->state) {
-            case WS_STATE_HEADER:
-                state_h = (ws_state_header*) cli_con->state;
-                len = ws_peak(cli_con, &buffer);
-                if (!len) {
-                    goto no_more_bytes;
-                }
-
-                for (i = 0; i < len && buffer[i] != ':'; i++);
-
-                int selected = bl_str_select(&state_h->tag_finder, buffer, i);
-                if (i < len) {
-                    switch (selected) {
-                        case WS_H_FIELD_UPGRADE:
-                            state_h->state.state = WS_STATE_CHECK_UPGRADE;
-                            state_h->sub_state = 1;
-                            const char* str = "websocket";
-                            bl_str_reset(&state_h->tag_finder, &str, 1);
-                            break;
-
-                        case WS_H_FIELD_KEY:
-                            state_h->state.state = WS_STATE_HEADER_KEY;
-                            state_h->sub_state = 1;
-                            break;
-
-                        case BL_STR_NO_MATCH:
-                        case BL_STR_NO_MATCH_YET:
-                            break;
-                    }
-                }
-                ws_consume(cli_con, i);
-                break;
-
-            case WS_STATE_CHECK_UPGRADE:
-                state_h = (ws_state_header*) cli_con->state;
-                len = ws_peak(cli_con, &buffer);
-                if (!len) {
-                    goto no_more_bytes;
-                }
-
-                skip = 0;
-                if (state_h->sub_state) {
-                    for (i = 0; i < len &&
-                            buffer[i] != '\r' &&
-                            buffer[i] != '\n'; i++) {
-                   
-                        if (buffer[i] == ':' || buffer[i] == ' ' || buffer[i] == '\t') {
-                            skip++;
-                        } else {
-                            state_h->sub_state = 0;
-                            break;
-                        }
-                    }
-                } // else
-                // FIXME: i is not set to the end of the string when sub_state is 0
-                selected = bl_str_select(&state_h->tag_finder, buffer + skip, i - skip);
-                if (i < len) {
-                    if (selected == 0) { // we found 'websocket'
-                        state_h->found_upgrade = 1;
-                    }
-                    // ---> eat end lines and whitespace
-                    state_h->state.state = WS_STATE_EAT_WHITESPACE;
-                }
-                ws_consume(cli_con, i);
-                break;
-            case WS_STATE_HEADER_KEY:
-                state_h = (ws_state_header*) cli_con->state;
-                len = ws_peak(cli_con, &buffer);
-                if (!len) {
-                    goto no_more_bytes;
-                }
-
-                skip = 0;
-                if (state_h->sub_state) {
-                    for (i = 0; i < len &&
-                            buffer[i] != '\r' &&
-                            buffer[i] != '\n'; i++) {
-                   
-                        if (buffer[i] == ':' || buffer[i] == ' ' || buffer[i] == '\t') {
-                            skip++;
-                        } else {
-                            state_h->sub_state = 0;
-                            break;
-                        }
-                    }
-                }
-                
-                ws_consume(cli_con, i);
-                break;
-            case WS_STATE_EAT_WHITESPACE:
-                state_h = (ws_state_header*) cli_con->state;
-                len = ws_peak(cli_con, &buffer);
-                if (!len) {
-                    goto no_more_bytes;
-                }
-                int endl_count = 0;
-                for (i = 0; i < len && (
-                    buffer[i] == '\r' ||
-                    buffer[i] == '\n' ||
-                    buffer[i] == ' ' ||
-                    buffer[i] == '\t'
-                    ); i++) {
-                        
-                    if (buffer[i] == '\n') {
-                        endl_count++;
-                        if (endl_count >= 2) {
-                            // found the end of the header
-                            i++; // make sure we consume the last byte
-                            break;
-                        }
-                    }
-                }
-                if (endl_count >= 2){
-                    // TODO: parse header
-                    //ws_parse_header(cli_con);
-                    printf("reading header complete.\n");
-                } else if (i < len) {
-                    // ---> go back to header scanning
-                    state_h->state.state = WS_STATE_HEADER;
-                    bl_str_reset(&state_h->tag_finder, WS_H_FIELDS, WS_H_FIELDS_LEN);
-                }
-                ws_consume(cli_con, i); // nom nom nom
-
-                break;
-
-
-        }
-    }
-    no_more_bytes:
 
     // pbufs got freed as we used them
     tcp_recved(tpcb, cli_con->recved_current);
@@ -431,11 +490,16 @@ static err_t tcp_server_accept(void *arg, struct tcp_pcb *client_pcb, err_t err)
     DEBUG_printf("Client connected\n");
 
     cli_con->printed_circuit_board = client_pcb;
+    cli_con->task = task_ws_header; // TODO: make the task more local to the connection
+
     tcp_arg(client_pcb, cli_con);
     tcp_sent(client_pcb, tcp_server_sent);
     tcp_recv(client_pcb, tcp_server_recv);
     tcp_poll(client_pcb, tcp_server_poll, 10);
     tcp_err(client_pcb, tcp_server_err);
+
+    // It will just run until it needs bytes and wait
+    sub_task_run(cli_con->task, do_ws_header, cli_con);
 
     //return tcp_server_send_data(arg, cli_con->printed_circuit_board);
     return ERR_OK;
@@ -487,51 +551,14 @@ void run_tcp_server_test() {
     // TODO: deallocate ws_cliant_con later
 }
 
-size_t thingy_task(struct sub_task* task, void* args) {
-    printf("Lets print some stuff: %s\n", (char*) args);
-    args = sub_task_yield(3, task);
-    printf("More stuff: %s\n", (char*) args);
-
-    int i;
-    for (i = 0; i < 10; i++) {
-        printf("Ineration %d, Number: 0x%X\n", i, (size_t) sub_task_yield(4, task));
-    }
-
-    printf("Hello World\n");
-    return 42;
-}
-
-SUB_TASK_GLOBAL(the_task, 1020)
-
 int main() {
     //const uint LED_PIN = PICO_DEFAULT_LED_PIN;
     //gpio_init(LED_PIN);
     //gpio_set_dir(LED_PIN, GPIO_OUT);
     stdio_init_all();
 
-    SUB_TASK_GLOBAL_INIT(the_task)
+    SUB_TASK_GLOBAL_INIT(task_ws_header)
 
-    void* args = (void*) &"The first args";
-    printf("function pointer %p\n", thingy_task);
-    size_t pre_ret = sub_task_run(the_task, thingy_task, args);
-    
-    while (1) {
-        switch ((size_t) pre_ret) {
-            case 3:
-                args = (void*) &"Another string";
-                break;
-            case 4:
-                args = (void*) 0xABCDEF;
-                break; 
-            default:
-                printf("Done: %d\n", (size_t) pre_ret);
-                goto yeet;
-        }
-        pre_ret = sub_task_run(the_task, NULL, args);
-    }
-    yeet:
-    return 0;
-    /*
     if (cyw43_arch_init_with_country(CYW43_COUNTRY_USA)) {
         printf("Wi-Fi init failed\n");
         return -1;
@@ -645,6 +672,6 @@ int main() {
         // TODO: What happens if the wifi link goes down? will the server/connections error out?
         // should we check and re-initialize it?
     }
-    cyw43_arch_deinit();*/
+    cyw43_arch_deinit();
 }
 

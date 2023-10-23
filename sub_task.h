@@ -4,29 +4,29 @@
 
 #include <stddef.h>
 
-struct sub_task {
+typedef struct sub_task_ {
     void* stack_ptr;
     char stack[];
-};
+} sub_task;
 
 /**
  * @brief Allocates a sub-task stack on the current stack
  * 
  */
 #define SUB_TASK_ON_STACK(name, size) \
-    u8_t _on_stack_##name[size + sizeof(struct sub_task)]; \
-    struct sub_task* name = (struct sub_task*) _on_stack_##name; \
-    name->stack_ptr = (void*) name + size + sizeof(struct sub_task);
+    u8_t _on_stack_##name[size + sizeof(sub_task)]; \
+    sub_task* name = (sub_task*) _on_stack_##name; \
+    name->stack_ptr = (void*) name + size + sizeof(sub_task);
 
 /**
  * @brief Allocates a sub-task stack in global unititialized memory.
  * SUB_TASK_GLOBAL_INIT(name) must be called before it's first use.
  */
 #define SUB_TASK_GLOBAL(name, size) \
-    u8_t _on_bss_##name[size + sizeof(struct sub_task)]; \
-    struct sub_task* name = (struct sub_task*) _on_bss_##name; \
+    u8_t _on_bss_##name[size + sizeof(sub_task)]; \
+    sub_task* name = (sub_task*) _on_bss_##name; \
      \
-    static const _on_bss_size_##name = size + sizeof(struct sub_task); // Keep track of the size for the init at runtime
+    static const _on_bss_size_##name = size + sizeof(sub_task); // Keep track of the size for the init at runtime
 
 #define SUB_TASK_GLOBAL_INIT(name) \
     name->stack_ptr = (void*) name + _on_bss_size_##name;
@@ -43,7 +43,7 @@ struct sub_task {
  * @param args Put data in here ...
  * @return size_t
  */
-size_t sub_task_run(struct sub_task* task, size_t (*task_function)(struct sub_task*, void*), void* args);
+size_t sub_task_run(sub_task* task, size_t (*task_function)(sub_task*, void*), void* args);
 
 /**
  * @brief Yield to the colling procedure. Maybe we will have more data when we continue.
@@ -54,9 +54,9 @@ size_t sub_task_run(struct sub_task* task, size_t (*task_function)(struct sub_ta
  * @param current_task The current task.
  * @return void* ... and the data comes out here!
  */
-void* sub_task_yield(size_t pre_ret_code, struct sub_task* current_task);
+void* sub_task_yield(size_t pre_ret_code, sub_task* current_task);
 
-static inline size_t sub_task_continue(struct sub_task* task, void* args) {
+static inline size_t sub_task_continue(sub_task* task, void* args) {
     return sub_task_run(task, NULL, args);
 }
 

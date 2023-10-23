@@ -43,10 +43,6 @@ void bl_str_reset(bl_str_selecter* selecter, const char** strs, int strs_len) {
     selecter->str_index = 0;
 }
 
-typedef struct base64_ctx_ {
-    uint32_t partial;
-} base64_ctx;
-
 char base64bits(char base64) {
     if (base64 >= 'A' && base64 <= 'Z') {
         return base64 - 'A';
