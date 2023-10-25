@@ -386,7 +386,7 @@ size_t do_ws_header(sub_task* task, void* args) {
     header_done:
 
     tcp_write(cli_con->printed_circuit_board, ws_responce1, sizeof(ws_responce1) - 1, 0);
-    encode
+    encode_base64();
     tcp_write(cli_con->printed_circuit_board, ws_responce2, sizeof(ws_responce2) - 1, 0);
 
 }

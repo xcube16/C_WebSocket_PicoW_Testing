@@ -59,6 +59,11 @@ char base64bits(char base64) {
     }
 }
 
+char bitsToBase64(char base64) {
+    // TODO
+    return -1;
+}
+
 int decode_base64(base64_ctx* ctx, char* base64_buf, char* output_buf, int base64_len, char end) {
     // end is just used when we have a base64 input that does not use padding.
 
@@ -104,4 +109,35 @@ int decode_base64(base64_ctx* ctx, char* base64_buf, char* output_buf, int base6
     ctx->partial = (sub_i << 30) | (bytes & 0x3FFFFFFF);
 
     return byte_index; // return number of bytes decoded
+}
+
+// TODO: pause/resume?
+int encode_base64(char* base64_buf, char* input_buf, int input_len, char end) {
+    
+    int i;
+    int j;
+
+    for (i = j = 0; i < input_len - 2; i += 3) {
+        base64_buf[j++] = bitsToBase64(input_buf[i] >> 2);
+        base64_buf[j++] = bitsToBase64((input_buf[i] << 4 | input_buf[i + 1] >> 4) & 0x3F);
+        base64_buf[j++] = bitsToBase64((input_buf[i + 1] << 2 | input_buf[i + 2] >> 6) & 0x3F);
+        base64_buf[j++] = bitsToBase64(input_buf[i + 2]  & 0x3F);
+    }
+    switch (input_len - i) {
+        case 2:
+            base64_buf[j++] = bitsToBase64(input_buf[i] >> 2);
+            base64_buf[j++] = bitsToBase64((input_buf[i] << 4 | input_buf[i + 1] >> 4) & 0x3F);
+            base64_buf[j++] = bitsToBase64((input_buf[i + 1] << 2) & 0x3F);
+            base64_buf[j++] = '=';
+            break;
+        case 1:
+            base64_buf[j++] = bitsToBase64(input_buf[i] >> 2);
+            base64_buf[j++] = bitsToBase64((input_buf[i] << 4) & 0x3F);
+            base64_buf[j++] = '=';
+            base64_buf[j++] = '=';
+            break;
+    
+        default:
+            break;
+    }
 }
