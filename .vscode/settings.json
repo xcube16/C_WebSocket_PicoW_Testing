@@ -35,6 +35,8 @@
         "config.h": "c",
         "stddef.h": "c",
         "typeinfo": "c",
-        "memp_std.h": "c"
+        "memp_std.h": "c",
+        "string.h": "c",
+        "sub_task.h": "c"
     }
 }

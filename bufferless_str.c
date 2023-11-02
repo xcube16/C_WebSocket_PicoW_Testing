@@ -52,15 +52,24 @@ char base64bits(char base64) {
         return base64 - ('0' - ('Z' - 'A' + 1) - ('z' - 'a' + 1));
     } else if (base64 == '+') {
         return (('Z' - 'A' + 1) + ('z' - 'a' + 1) + ('9' - '0' + 1));
-    } else if (base64 == '+') {
+    } else if (base64 == '+') { // ???
         return (('Z' - 'A' + 1) + ('z' - 'a' + 1) + ('9' - '0' + 1) + 1);
-    } else {
-        return -1;
     }
+    return -1;
 }
 
-char bitsToBase64(char base64) {
-    // TODO
+char bitsToBase64(char bits) {
+    if (bits < 26) {
+        return 'A' + bits;
+    } else if (bits < 52) {
+        return 'a' + bits - 26;
+    } else if (bits < 62) {
+        return '0' + bits - 52;
+    } else if (bits == 62) {
+        return '+';
+    } else if (bits == 63) {
+        return '/';
+    }
     return -1;
 }
 
@@ -112,32 +121,28 @@ int decode_base64(base64_ctx* ctx, char* base64_buf, char* output_buf, int base6
 }
 
 // TODO: pause/resume?
-int encode_base64(char* base64_buf, char* input_buf, int input_len, char end) {
+int encode_base64(char* base64_buf, char* input_buf, int input_len) {
     
     int i;
     int j;
 
-    for (i = j = 0; i < input_len - 2; i += 3) {
+    for (i = j = 0; i < input_len; i += 3) {
+
         base64_buf[j++] = bitsToBase64(input_buf[i] >> 2);
-        base64_buf[j++] = bitsToBase64((input_buf[i] << 4 | input_buf[i + 1] >> 4) & 0x3F);
-        base64_buf[j++] = bitsToBase64((input_buf[i + 1] << 2 | input_buf[i + 2] >> 6) & 0x3F);
-        base64_buf[j++] = bitsToBase64(input_buf[i + 2]  & 0x3F);
-    }
-    switch (input_len - i) {
-        case 2:
-            base64_buf[j++] = bitsToBase64(input_buf[i] >> 2);
+        if (i < input_len - 1) {
             base64_buf[j++] = bitsToBase64((input_buf[i] << 4 | input_buf[i + 1] >> 4) & 0x3F);
-            base64_buf[j++] = bitsToBase64((input_buf[i + 1] << 2) & 0x3F);
-            base64_buf[j++] = '=';
-            break;
-        case 1:
-            base64_buf[j++] = bitsToBase64(input_buf[i] >> 2);
+            if (i < input_len - 2) {
+                base64_buf[j++] = bitsToBase64((input_buf[i + 1] << 2 | input_buf[i + 2] >> 6) & 0x3F);
+                base64_buf[j++] = bitsToBase64(input_buf[i + 2]  & 0x3F);
+
+            } else {
+                base64_buf[j++] = bitsToBase64((input_buf[i + 1] << 2) & 0x3F);
+                base64_buf[j++] = '=';
+            }
+        } else {
             base64_buf[j++] = bitsToBase64((input_buf[i] << 4) & 0x3F);
             base64_buf[j++] = '=';
             base64_buf[j++] = '=';
-            break;
-    
-        default:
-            break;
+        }
     }
 }
