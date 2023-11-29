@@ -39,6 +39,8 @@ const char wifi_ssid[] = "placeholder";
 const char wifi_password[] = "placeholder";
 #define TCP_PORT 8080
 
+
+
 const char ws_responce1[] =
     "HTTP/1.1 101 Switching Protocols\r\n"
     "Upgrade: websocket\r\n"
@@ -48,7 +50,7 @@ const char ws_responce1[] =
 const char ws_responce2[] =
     "\r\nSec-WebSocket-Protocol: chat\r\n\r\n";
 
-// ================ CLIANT CONNECTION ================
+const char ws_uuid[] = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 SUB_TASK_GLOBAL(task_ws_header, 1020);
 
@@ -60,11 +62,15 @@ SUB_TASK_GLOBAL(task_ws_header, 1020);
 #define WS_H_FIELD_UPGRADE 0
 #define WS_H_FIELD_KEY 1
 
+#define WS_KEY_LEN 24
+
 #define WS_H_FIELDS_LEN 2
 const char* WS_H_FIELDS[] = {
     "Upgrade",
     "Sec-WebSocket-Key",
 };
+
+// ================ CLIANT CONNECTION ================
 
 typedef struct ws_state_ {
     int state;
@@ -265,7 +271,36 @@ int ws_eat_whitespace(ws_cliant_con* cli_con) {
     } while (true);
 }
 
+void ws_t_write_barrier(ws_cliant_con* cli_con) {
+
+    // TODO: define this function to wait for the writes to be ACK'ed (sent callback)
+    //       Add cases to make sure recieved only resumes the thread when we are waiting for it
+    //       Add cases to make sure barrier only resumes when all sent stuff is ACK'ed. All? hmm maybe optimize.
+
+    while (cli_con->printed_circuit_board->snd_queuelen) {
+        sub_task_yield(); //TODO
+    }
+}
+
 // end threaded helper functions
+
+void ws_consume_line(ws_cliant_con* cli_con) {
+    int i;
+    char* buf;
+    size_t len;
+
+    while(true) {
+        len = ws_t_peak(cli_con, &buf);
+
+        for (i = 0; i < len; i++) {
+            if (buf[i] == '\r') {
+                ws_consume(cli_con, i); // consume everything before '\r'
+                return;
+            }
+        }
+        ws_consume(cli_con, len);
+    }
+}
 
 int ws_confirm_tag(ws_cliant_con* cli_con, char* tag) {
     int i;
@@ -289,29 +324,18 @@ int ws_confirm_tag(ws_cliant_con* cli_con, char* tag) {
                     return true; // They are equal
                 } else {
                     ws_consume(cli_con, i + 1);
-                    goto consume_line;
+                    ws_consume_line(cli_con);
+                    return false;
                 }
             }
             if (buf[i] != tag[i]) {
                 ws_consume(cli_con, i);
-                goto consume_line;
+                ws_consume_line(cli_con);
+                return false;
             }
         }
 
         tag += len; // advance the tag pointer
-        ws_consume(cli_con, len);
-    }
-
-    consume_line:
-    while(true) {
-        len = ws_t_peak(cli_con, &buf);
-
-        for (i = 0; i < len; i++) {
-            if (buf[i] == '\r') {
-                ws_consume(cli_con, i); // consume everything before '\r'
-                return false;
-            }
-        }
         ws_consume(cli_con, len);
     }
 }
@@ -324,6 +348,8 @@ size_t do_ws_header(sub_task* task, void* args) {
     cli_con->state = (ws_state*) &state_h;
 
     bool websocket_upgrade = false;
+    bool websocket_gotKey = false;
+    char wsKey[WS_KEY_LEN + sizeof(ws_uuid)];
 
     // Read the header
     while (true) { // break when we hit a double end line? (\r\n\r\n)
@@ -332,8 +358,6 @@ size_t do_ws_header(sub_task* task, void* args) {
         char* buffer;
         int len;
         int selected;
-
-        char wsKey[16];
 
         bl_str_reset(&state_h.tag_finder, WS_H_FIELDS, WS_H_FIELDS_LEN);
 
@@ -354,7 +378,7 @@ size_t do_ws_header(sub_task* task, void* args) {
 
         } while(i == len); // If i == len, we have read part of the string, but have not hit the ':' yet
         
-        if (ws_eat_whitespace(cli_con)) {
+        if (ws_eat_whitespace(cli_con)) { // eat the ": "
             DEBUG_printf("Unexpected line end.\n");
         }
 
@@ -369,26 +393,45 @@ size_t do_ws_header(sub_task* task, void* args) {
                 break;
 
             case WS_H_FIELD_KEY:
-                state_h.sub_state = 1;
 
-                base64_ctx ctx;
-                buffer = ws_t_read(cli_con, 24);
-                decode_base64(&ctx, buffer, wsKey, false);
-                
-                // TODO: read the key
+                buffer = ws_t_read(cli_con, WS_KEY_LEN);
+                memcpy(wsKey, buffer, WS_KEY_LEN);
                 break;
 
             case BL_STR_NO_MATCH:
             case BL_STR_NO_MATCH_YET:
                 break;
         }
+
+        if (!ws_eat_whitespace(cli_con)) { // eat "\r\n"
+            DEBUG_printf("Part of value unconsumed.\n");
+            ws_consume_line(cli_con);
+        }
     }
     header_done:
 
+    // Write the first part of the responce
     tcp_write(cli_con->printed_circuit_board, ws_responce1, sizeof(ws_responce1) - 1, 0);
-    encode_base64();
+    
+    // Write the Accept key
+    char hashBuf[20];
+    char baseBuf[28];
+    memcpy(wsKey + WS_KEY_LEN, ws_uuid, sizeof(ws_uuid));
+    mbedtls_sha1_ret(wsKey, WS_KEY_LEN + sizeof(ws_uuid), hashBuf);
+    encode_base64(baseBuf, hashBuf, 20);
+    tcp_write(cli_con->printed_circuit_board, baseBuf, sizeof(baseBuf), 0);
+    
+    // Write the first last of the responce
     tcp_write(cli_con->printed_circuit_board, ws_responce2, sizeof(ws_responce2) - 1, 0);
 
+    // Flush the output? I am not really sure if this is needed or even wanted.
+    tcp_output(cli_con->printed_circuit_board);
+
+    // TODO: define this function to wait for the writes to be ACK'ed (sent callback)
+    //       Add cases to make sure recieved only resumes the thread when we are waiting for it
+    //       Add cases to make sure barrier only resumes when all sent stuff is ACK'ed. All? hmm maybe optimize.
+    // We need this to complete as the tcp_write's have pointers to our stack memory! (baseBuf)!
+    ws_t_write_barrier(cli_con);
 }
 
 // ============= YUCK YUCK YUCK!!!! =============
