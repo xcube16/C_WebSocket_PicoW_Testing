@@ -278,7 +278,7 @@ void ws_t_write_barrier(ws_cliant_con* cli_con) {
     //       Add cases to make sure barrier only resumes when all sent stuff is ACK'ed. All? hmm maybe optimize.
 
     while (cli_con->printed_circuit_board->snd_queuelen) {
-        sub_task_yield(); //TODO
+        sub_task_yield(cli_con->task); //TODO
     }
 }
 
@@ -494,7 +494,12 @@ err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
 
     DEBUG_printf("tcp_server_recv %d err %d\n", p->tot_len, err);
 
-    cli_con->p_current = p;
+    // We might have some un-processed pbufs if the subtask yielded for some other reason, stack the new ones on top.
+    if (cli_con->p_current) {
+        pbuf_cat(cli_con->p_current, p);
+    } else {
+        cli_con->p_current = p;
+    }
 
     if (!sub_task_continue(cli_con->task, cli_con)) {
         DEBUG_printf("Done reading WS Header.\n");
