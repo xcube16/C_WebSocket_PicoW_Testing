@@ -35,30 +35,16 @@ static const char* cyw43_tcpip_link_status_name(int status) {
     return "unknown";
 }
 
+// ============== Configuration and Stuff for Main ===========
 const char wifi_ssid[] = "placeholder";
 const char wifi_password[] = "placeholder";
 #define TCP_PORT 8080
 
-
-
-const char ws_responce1[] =
-    "HTTP/1.1 101 Switching Protocols\r\n"
-    "Upgrade: websocket\r\n"
-    "Connection: Upgrade\r\n"
-    "Sec-WebSocket-Accept: ";
-
-const char ws_responce2[] =
-    "\r\nSec-WebSocket-Protocol: chat\r\n\r\n";
-
-const char ws_uuid[] = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-
+// TODO: Support multiple connections
 SUB_TASK_GLOBAL(task_ws_header, 1020);
 
-#define WS_STATE_HEADER 1
-#define WS_STATE_HEADER_KEY 2
-#define WS_STATE_CHECK_UPGRADE 3
-#define WS_STATE_EAT_WHITESPACE 4
-
+// =============== Header Processing stuff ===========
+// recieve
 #define WS_H_FIELD_UPGRADE 0
 #define WS_H_FIELD_KEY 1
 
@@ -70,41 +56,41 @@ const char* WS_H_FIELDS[] = {
     "Sec-WebSocket-Key",
 };
 
-// ================ CLIANT CONNECTION ================
+// send
+const char ws_responce1[] =
+    "HTTP/1.1 101 Switching Protocols\r\n"
+    "Upgrade: websocket\r\n"
+    "Connection: Upgrade\r\n"
+    "Sec-WebSocket-Accept: ";
 
-typedef struct ws_state_ {
-    int state;
-} ws_state;
+const char ws_responce2[] =
+    "\r\nSec-WebSocket-Protocol: chat\r\n\r\n";
+
+const char ws_uuid[] = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+
+// ================ CLIANT CONNECTION ================
 
 typedef struct ws_cliant_con_ {
     struct tcp_pcb* server_pcb; // TODO: remove server pcb.
     struct tcp_pcb* printed_circuit_board; // I honistly have no idea
 
     // fill this buffer with the requested processable size
+    // TODO: Now that we save pbufs for later and are not forced to process all of them in the tcp_recv callback,
+    //       Maybe we should refactor/remove this simple buffer.
     char* buf;
     size_t buf_size;
     size_t buf_total_size;
 
+    // Holds NULL or points to a chain pbufs accumulated by our tcp_recv callback
     struct pbuf* p_current;
+    // Count the data we have processed so we can call tcp_receved in one shot, usually after a yield.
     size_t recved_current;
 
-    ws_state* state;
-    // TODO: abstract data expecter thingy with function pointers and custom state in it
-
+    // Basically a thread that is handling a single connection.
+    // TODO: Multiple connections?
     sub_task* task;
 
 } ws_cliant_con;
-
-typedef struct ws_state_header_ {
-    ws_state state;
-    bl_str_selecter tag_finder;
-    char sub_state;
-
-    char found_upgrade;
-    char* ws_key;
-    size_t ws_key_len;
-
-} ws_state_header;
 
 // normal helper functions
 
@@ -278,7 +264,7 @@ void ws_t_write_barrier(ws_cliant_con* cli_con) {
     //       Add cases to make sure barrier only resumes when all sent stuff is ACK'ed. All? hmm maybe optimize.
 
     while (cli_con->printed_circuit_board->snd_queuelen) {
-        sub_task_yield(cli_con->task); //TODO
+        sub_task_yield(/* TODO: YIELD REASONS ENUM!!!! */, cli_con->task); //TODO
     }
 }
 
@@ -342,10 +328,8 @@ int ws_confirm_tag(ws_cliant_con* cli_con, char* tag) {
 
 size_t do_ws_header(sub_task* task, void* args) {
     ws_cliant_con* cli_con = (ws_cliant_con*) args;
-
-    ws_state_header state_h;
     
-    cli_con->state = (ws_state*) &state_h;
+    bl_str_selecter tag_finder;
 
     bool websocket_upgrade = false;
     bool websocket_gotKey = false;
@@ -359,7 +343,7 @@ size_t do_ws_header(sub_task* task, void* args) {
         int len;
         int selected;
 
-        bl_str_reset(&state_h.tag_finder, WS_H_FIELDS, WS_H_FIELDS_LEN);
+        bl_str_reset(&tag_finder, WS_H_FIELDS, WS_H_FIELDS_LEN);
 
         do {
             len = ws_t_peak(cli_con, &buffer); // *grab*
@@ -372,7 +356,7 @@ size_t do_ws_header(sub_task* task, void* args) {
                     goto header_done;
                 } 
             }
-            selected = bl_str_select(&state_h.tag_finder, buffer, i);
+            selected = bl_str_select(&tag_finder, buffer, i);
 
             ws_consume(cli_con, i); // *munch!*
 
@@ -434,8 +418,8 @@ size_t do_ws_header(sub_task* task, void* args) {
     ws_t_write_barrier(cli_con);
 }
 
-// ============= YUCK YUCK YUCK!!!! =============
-// TODO: REFACTOR!!!!!!!!!!!!!!
+// ============= BETTER, BUT STILL KINDA BAD! =============
+// TODO: REFACTOR!
 
 static err_t tcp_server_result(void *arg, int status) {
     ws_cliant_con* cli_con = (ws_cliant_con*)arg;
@@ -471,6 +455,8 @@ static err_t tcp_server_result(void *arg, int status) {
 
 static err_t tcp_server_sent(void* arg, struct tcp_pcb* tpcb, u16_t len) {
     ws_cliant_con* state = (ws_cliant_con*)arg;
+
+    // TODO: This is where we resume ws_t_write_barrier!
 
     printf("tcp_server_sent %u\n", len);
 
@@ -514,7 +500,8 @@ err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
 
 static err_t tcp_server_poll(void *arg, struct tcp_pcb *tpcb) {
     DEBUG_printf("tcp_server_poll_fn\n");
-    return tcp_server_result(arg, -1); // no response is an error?
+    // Basically a 10 second timeout for now.
+    return tcp_server_result(arg, -1);
 }
 
 static void tcp_server_err(void *arg, err_t err) {
@@ -543,7 +530,7 @@ static err_t tcp_server_accept(void *arg, struct tcp_pcb *client_pcb, err_t err)
     tcp_arg(client_pcb, cli_con);
     tcp_sent(client_pcb, tcp_server_sent);
     tcp_recv(client_pcb, tcp_server_recv);
-    tcp_poll(client_pcb, tcp_server_poll, 10);
+    tcp_poll(client_pcb, tcp_server_poll, 20); // 10 second timeout (20 "TCP coarse grained timer shots")
     tcp_err(client_pcb, tcp_server_err);
 
     // It will just run until it needs bytes and wait
