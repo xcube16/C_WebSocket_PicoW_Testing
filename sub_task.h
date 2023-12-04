@@ -26,7 +26,7 @@ typedef struct sub_task_ {
     u8_t _on_bss_##name[size + sizeof(sub_task)]; \
     sub_task* name = (sub_task*) _on_bss_##name; \
      \
-    static const _on_bss_size_##name = size + sizeof(sub_task); // Keep track of the size for the init at runtime
+    static const size_t _on_bss_size_##name = size + sizeof(sub_task); // Keep track of the size for the init at runtime
 
 #define SUB_TASK_GLOBAL_INIT(name) \
     name->stack_ptr = (void*) name + _on_bss_size_##name;

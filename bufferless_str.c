@@ -1,6 +1,5 @@
 
 #include "bufferless_str.h"
-#include <stdint.h>
 
 int bl_str_select (bl_str_selecter* selecter, char* buf, int buf_len) {
     

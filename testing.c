@@ -70,6 +70,10 @@ const char ws_uuid[] = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 // ================ CLIANT CONNECTION ================
 
+#define WS_T_YIELD_REASON_END 0
+#define WS_T_YIELD_REASON_READ 1
+#define WS_T_YIELD_REASON_FLUSH 2
+
 typedef struct ws_cliant_con_ {
     struct tcp_pcb* server_pcb; // TODO: remove server pcb.
     struct tcp_pcb* printed_circuit_board; // I honistly have no idea
@@ -89,6 +93,7 @@ typedef struct ws_cliant_con_ {
     // Basically a thread that is handling a single connection.
     // TODO: Multiple connections?
     sub_task* task;
+    int task_yield_reason;
 
 } ws_cliant_con;
 
@@ -116,6 +121,7 @@ char* ws_read(ws_cliant_con* cli_con, size_t size) {
             cli_con->p_current = pbuf_free_header(cli_con->p_current, size);
             cli_con->recved_current += size;
             return payload;
+            #warning "USE AFTER FREE!!! WARNING! WARNING! WARNING!" // TODO: Fix this ASAP!
         }
     }
 
@@ -213,7 +219,7 @@ int ws_consume(ws_cliant_con* cli_con, size_t size) {
 char* ws_t_read(ws_cliant_con* cli_con, size_t size) {
     char* ret;
     while (!(ret = ws_read(cli_con, size))) {
-        sub_task_yield(1, cli_con->task);
+        sub_task_yield(WS_T_YIELD_REASON_READ, cli_con->task);
     }
     return ret;
 }
@@ -229,7 +235,7 @@ char* ws_t_read(ws_cliant_con* cli_con, size_t size) {
 size_t ws_t_peak(ws_cliant_con* cli_con, char** buf_ptr) {
     size_t ret;
     while (!(ret = ws_peak(cli_con, buf_ptr))) {
-        sub_task_yield(1, cli_con->task);
+        sub_task_yield(WS_T_YIELD_REASON_READ, cli_con->task);
     }
     return ret;
 }
@@ -264,7 +270,48 @@ void ws_t_write_barrier(ws_cliant_con* cli_con) {
     //       Add cases to make sure barrier only resumes when all sent stuff is ACK'ed. All? hmm maybe optimize.
 
     while (cli_con->printed_circuit_board->snd_queuelen) {
-        sub_task_yield(/* TODO: YIELD REASONS ENUM!!!! */, cli_con->task); //TODO
+        sub_task_yield(WS_T_YIELD_REASON_FLUSH, cli_con->task); //TODO
+    }
+}
+
+/**
+ * @brief Called when an event has happened that might be able to wake up a yielded task
+ * 
+ * @param cli_con 
+ */
+void ws_t_wake(ws_cliant_con* cli_con) {
+
+    // We could have other reasons to resume pile up while we wait for the one we want.
+    // This is unlikely as the task should be smart enough *not* to yield if it does not
+    // need to. It does not hurt, although we might not even need this helper function.
+    while (true) {
+        switch (cli_con->task_yield_reason) {
+            case WS_T_YIELD_REASON_READ:
+                if (!cli_con->p_current) {
+                    return; // Nothing to read yet.
+                }
+                // The task is yielding for more data, we have some now, so lets continue.
+                cli_con->task_yield_reason = sub_task_continue(cli_con->task, cli_con);
+                
+                // Inform the TCP stack of how many bytes we processed. Could be zero
+                // (if the task yields to peek then yields to flush for example).
+                tcp_recved(cli_con->printed_circuit_board, cli_con->recved_current);
+                cli_con->recved_current = 0;
+                break;
+            
+            case WS_T_YIELD_REASON_FLUSH:
+                if (cli_con->printed_circuit_board->snd_queuelen) {
+                    return; // Not flushed yet.
+                }
+
+                cli_con->task_yield_reason = sub_task_continue(cli_con->task, cli_con);
+                break;
+
+            case WS_T_YIELD_REASON_END:
+            default:
+                DEBUG_printf("Done with WS task. TODO: Close the connection?\n");
+                return;
+        }
     }
 }
 
@@ -411,11 +458,15 @@ size_t do_ws_header(sub_task* task, void* args) {
     // Flush the output? I am not really sure if this is needed or even wanted.
     tcp_output(cli_con->printed_circuit_board);
 
-    // TODO: define this function to wait for the writes to be ACK'ed (sent callback)
-    //       Add cases to make sure recieved only resumes the thread when we are waiting for it
-    //       Add cases to make sure barrier only resumes when all sent stuff is ACK'ed. All? hmm maybe optimize.
-    // We need this to complete as the tcp_write's have pointers to our stack memory! (baseBuf)!
+    DEBUG_printf("Header complete.\n");
     ws_t_write_barrier(cli_con);
+
+    DEBUG_printf("Header sent.\n");
+    while (true) {
+        printf("%02hhX", *ws_t_read(cli_con, 1));
+    }
+
+    return WS_T_YIELD_REASON_END; // TODO: Do more stuff with this task? Will a new task be started?
 }
 
 // ============= BETTER, BUT STILL KINDA BAD! =============
@@ -454,9 +505,9 @@ static err_t tcp_server_result(void *arg, int status) {
 }
 
 static err_t tcp_server_sent(void* arg, struct tcp_pcb* tpcb, u16_t len) {
-    ws_cliant_con* state = (ws_cliant_con*)arg;
+    ws_cliant_con* cli_con = (ws_cliant_con*)arg;
 
-    // TODO: This is where we resume ws_t_write_barrier!
+    ws_t_wake(cli_con);
 
     printf("tcp_server_sent %u\n", len);
 
@@ -487,13 +538,9 @@ err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
         cli_con->p_current = p;
     }
 
-    if (!sub_task_continue(cli_con->task, cli_con)) {
-        DEBUG_printf("Done reading WS Header.\n");
-    }
+    ws_t_wake(cli_con);
 
-    // pbufs got freed as we used them
-    tcp_recved(tpcb, cli_con->recved_current);
-    cli_con->recved_current = 0;
+    // pbufs get freed as we used them. No need to free them here.
 
     return ERR_OK;
 }
@@ -534,7 +581,7 @@ static err_t tcp_server_accept(void *arg, struct tcp_pcb *client_pcb, err_t err)
     tcp_err(client_pcb, tcp_server_err);
 
     // It will just run until it needs bytes and wait
-    sub_task_run(cli_con->task, do_ws_header, cli_con);
+    cli_con->task_yield_reason = sub_task_run(cli_con->task, do_ws_header, cli_con);
 
     //return tcp_server_send_data(arg, cli_con->printed_circuit_board);
     return ERR_OK;

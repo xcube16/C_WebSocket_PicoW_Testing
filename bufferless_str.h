@@ -2,6 +2,7 @@
 #define BUFFERLESS_STR_H
 
 #include <string.h>
+#include <stdint.h>
 
 #define BL_STR_NO_MATCH_YET -1
 #define BL_STR_NO_MATCH -2
