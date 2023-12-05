@@ -60,7 +60,7 @@ const char* WS_H_FIELDS[] = {
 const char ws_responce1[] =
     "HTTP/1.1 101 Switching Protocols\r\n"
     "Upgrade: websocket\r\n"
-    "Connection: Upgrade\r\n"
+    "Connection: upgrade\r\n"
     "Sec-WebSocket-Accept: ";
 
 const char ws_responce2[] =
@@ -383,6 +383,8 @@ size_t do_ws_header(sub_task* task, void* args) {
     char wsKey[WS_KEY_LEN + sizeof(ws_uuid)];
 
     // Read the header
+    ws_consume_line(cli_con); // Throw away the first line, hehe
+    ws_eat_whitespace(cli_con);
     while (true) { // break when we hit a double end line? (\r\n\r\n)
 
         int i;
@@ -401,7 +403,7 @@ size_t do_ws_header(sub_task* task, void* args) {
                     // END OF HEADER DETECTED!!!!
                     ws_consume(cli_con, i + 1);
                     goto header_done;
-                } 
+                }
             }
             selected = bl_str_select(&tag_finder, buffer, i);
 
@@ -434,12 +436,16 @@ size_t do_ws_header(sub_task* task, void* args) {
                 break;
         }
 
-        if (!ws_eat_whitespace(cli_con)) { // eat "\r\n"
+        while (!ws_eat_whitespace(cli_con)) { // eat "\r\n"
             DEBUG_printf("Part of value unconsumed.\n");
             ws_consume_line(cli_con);
         }
     }
     header_done:
+
+    if (!websocket_upgrade) {
+        printf("Error: Thats not a websocket connection. TODO: handle this error\n");
+    }
 
     // Write the first part of the responce
     tcp_write(cli_con->printed_circuit_board, ws_responce1, sizeof(ws_responce1) - 1, 0);
@@ -448,7 +454,7 @@ size_t do_ws_header(sub_task* task, void* args) {
     char hashBuf[20];
     char baseBuf[28];
     memcpy(wsKey + WS_KEY_LEN, ws_uuid, sizeof(ws_uuid));
-    mbedtls_sha1_ret(wsKey, WS_KEY_LEN + sizeof(ws_uuid), hashBuf);
+    mbedtls_sha1_ret(wsKey, WS_KEY_LEN + (sizeof(ws_uuid) - 1), hashBuf);
     encode_base64(baseBuf, hashBuf, 20);
     tcp_write(cli_con->printed_circuit_board, baseBuf, sizeof(baseBuf), 0);
     
@@ -463,7 +469,7 @@ size_t do_ws_header(sub_task* task, void* args) {
 
     DEBUG_printf("Header sent.\n");
     while (true) {
-        printf("%02hhX", *ws_t_read(cli_con, 1));
+        printf("%c", *ws_t_read(cli_con, 1));
     }
 
     return WS_T_YIELD_REASON_END; // TODO: Do more stuff with this task? Will a new task be started?
@@ -507,9 +513,9 @@ static err_t tcp_server_result(void *arg, int status) {
 static err_t tcp_server_sent(void* arg, struct tcp_pcb* tpcb, u16_t len) {
     ws_cliant_con* cli_con = (ws_cliant_con*)arg;
 
-    ws_t_wake(cli_con);
-
     printf("tcp_server_sent %u\n", len);
+    
+    ws_t_wake(cli_con);
 
     return ERR_OK;
 }
