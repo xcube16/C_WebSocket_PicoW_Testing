@@ -240,37 +240,17 @@ size_t ws_t_peak(ws_cliant_con* cli_con, char** buf_ptr) {
     return ret;
 }
 
-/**
- * @brief Eats ':', ' ', sneezes when it hits a '\n' (returns 1), and returns 0 for any other char.
- * 
- * @param cli_con 
- * @return int 0 for non-whitespace, 1 for '\n'
- */
-int ws_eat_whitespace(ws_cliant_con* cli_con) {
-    char* buf;
-    size_t size;
-    do {
-        size = ws_t_peak(cli_con, &buf);
-        int i;
-        for (i = 0; i < size; i++) {
-            char c = buf[i];
-            if (c != ':' && c != ' ' && c != '\r') {
-                ws_consume(cli_con, i + (c == '\n'));
-                return c == '\n';
-            }
-        }
-        ws_consume(cli_con, i);
-    } while (true);
-}
-
 void ws_t_write_barrier(ws_cliant_con* cli_con) {
 
-    // TODO: define this function to wait for the writes to be ACK'ed (sent callback)
-    //       Add cases to make sure recieved only resumes the thread when we are waiting for it
-    //       Add cases to make sure barrier only resumes when all sent stuff is ACK'ed. All? hmm maybe optimize.
+    // TODO: This is basically just a flush-the-entire-TCP function.
+    //       Not very good, but it works. We will need a better system based
+    //       on markers (aquired when writing) via our future threaded tcp_write
+    //       function. Should these be absolute markers? Or just a countdown
+    //       to its-safe-to-free-the-buffer? I'm leaning in the direction
+    //       of countdown if we can make the tcp_sent callback not suck.
 
     while (cli_con->printed_circuit_board->snd_queuelen) {
-        sub_task_yield(WS_T_YIELD_REASON_FLUSH, cli_con->task); //TODO
+        sub_task_yield(WS_T_YIELD_REASON_FLUSH, cli_con->task);
     }
 }
 
@@ -316,6 +296,30 @@ void ws_t_wake(ws_cliant_con* cli_con) {
 }
 
 // end threaded helper functions
+
+/**
+ * @brief Eats ':', ' ', sneezes when it hits a '\n' (returns 1), and returns 0 for any other char.
+ *
+ * @param cli_con The connection handle
+ * @return int 0 for non-whitespace, 1 for '\n'
+ */
+int ws_eat_whitespace(ws_cliant_con* cli_con) {
+    char* buf;
+    size_t size;
+    do {
+        size = ws_t_peak(cli_con, &buf);
+        int i;
+        for (i = 0; i < size; i++) {
+            char c = buf[i];
+            if (c != ':' && c != ' ' && c != '\r') {
+                ws_consume(cli_con, i + (c == '\n'));
+                return c == '\n';
+            }
+        }
+        ws_consume(cli_con, i);
+    } while (true);
+}
+
 
 void ws_consume_line(ws_cliant_con* cli_con) {
     int i;
