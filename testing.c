@@ -262,7 +262,7 @@ err_t ws_t_write(ws_cliant_con* cli_con, void* dataptr, size_t len, u8_t apiflag
     while (tcp_sndbuf(cli_con->printed_circuit_board) == 0) {
         // TODO: The yield reason should not be a full flush. Just wait for tcp_sent!
         tcp_output(cli_con->printed_circuit_board);
-        if (ret = sub_task_yield(WS_T_YIELD_REASON_FLUSH, cli_con->task)) {
+        if (ret = (err_t) sub_task_yield(WS_T_YIELD_REASON_FLUSH, cli_con->task)) {
             return ret;
         }
     }
@@ -283,7 +283,7 @@ err_t ws_t_write(ws_cliant_con* cli_con, void* dataptr, size_t len, u8_t apiflag
         // Now that the send buffer is maxed out, lets wait for at some of it to drain out
         // TODO: The yield reason should not be a full flush. Just wait for tcp_sent!
         tcp_output(cli_con->printed_circuit_board);
-        if (ret = sub_task_yield(WS_T_YIELD_REASON_FLUSH, cli_con->task)) {
+        if (ret = (err_t) sub_task_yield(WS_T_YIELD_REASON_FLUSH, cli_con->task)) {
             return ret;
         }
     }
@@ -356,6 +356,9 @@ void ws_t_wake(ws_cliant_con* cli_con) {
 }
 
 // end threaded helper functions
+
+// TODO: cleanup this crazy header
+#include <websocket_framinator.h>
 
 /**
  * @brief Eats ':', ' ', sneezes when it hits a '\n' (returns 1), and returns 0 for any other char.
