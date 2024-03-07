@@ -37,6 +37,7 @@
         "typeinfo": "c",
         "memp_std.h": "c",
         "string.h": "c",
-        "sub_task.h": "c"
+        "sub_task.h": "c",
+        "tcp.h": "c"
     }
 }

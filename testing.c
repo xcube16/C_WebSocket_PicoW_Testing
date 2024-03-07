@@ -73,10 +73,18 @@ const char ws_uuid[] = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 #define WS_T_YIELD_REASON_END 0
 #define WS_T_YIELD_REASON_READ 1
 #define WS_T_YIELD_REASON_FLUSH 2
+#define WS_T_YIELD_REASON_WAIT_FOR_ACK 3
+
+typedef struct ws_ack_callback_ {
+    err_t (*call)(void*, u16_t);
+    void* arg;
+} ws_ack_callback;
 
 typedef struct ws_cliant_con_ {
     struct tcp_pcb* server_pcb; // TODO: remove server pcb.
     struct tcp_pcb* printed_circuit_board; // I honistly have no idea
+
+    ws_ack_callback ack_callback;
 
     // fill this buffer with the requested processable size
     // TODO: Now that we save pbufs for later and are not forced to process all of them in the tcp_recv callback,
@@ -96,6 +104,11 @@ typedef struct ws_cliant_con_ {
     int task_yield_reason;
 
 } ws_cliant_con;
+
+void set_ack_callback(ws_cliant_con* cli_con, err_t (*call)(void*, u16_t), void* arg) {
+    cli_con->ack_callback.call = call;
+    cli_con->ack_callback.arg = arg;
+}
 
 // normal helper functions
 
@@ -219,6 +232,7 @@ int ws_consume(ws_cliant_con* cli_con, size_t size) {
 char* ws_t_read(ws_cliant_con* cli_con, size_t size) {
     char* ret;
     while (!(ret = ws_read(cli_con, size))) {
+        // TODO: Propogate errors returned by sub_task_yield
         sub_task_yield(WS_T_YIELD_REASON_READ, cli_con->task);
     }
     return ret;
@@ -235,9 +249,48 @@ char* ws_t_read(ws_cliant_con* cli_con, size_t size) {
 size_t ws_t_peak(ws_cliant_con* cli_con, char** buf_ptr) {
     size_t ret;
     while (!(ret = ws_peak(cli_con, buf_ptr))) {
+        // TODO: Propogate errors returned by sub_task_yield
         sub_task_yield(WS_T_YIELD_REASON_READ, cli_con->task);
     }
     return ret;
+}
+
+err_t ws_t_write(ws_cliant_con* cli_con, void* dataptr, size_t len, u8_t apiflags/*, tcpwnd_size_t* countdown*/) {
+    err_t ret;
+
+    // Wait until we have at least *some* space on the send buffer
+    while (tcp_sndbuf(cli_con->printed_circuit_board) == 0) {
+        // TODO: The yield reason should not be a full flush. Just wait for tcp_sent!
+        tcp_output(cli_con->printed_circuit_board);
+        if (ret = sub_task_yield(WS_T_YIELD_REASON_FLUSH, cli_con->task)) {
+            return ret;
+        }
+    }
+
+    while (tcp_sndbuf(cli_con->printed_circuit_board) < len) {
+        // Looks like we are trying to send more than can fit on the send buffer.
+        // Well, lets shove in as much as we can and wait.
+
+        // write out the max amount
+        u16_t space_available = tcp_sndbuf(cli_con->printed_circuit_board);
+        if (ret = tcp_write(cli_con->printed_circuit_board, dataptr, space_available,
+                apiflags | TCP_WRITE_FLAG_MORE)) { // Set the MORE flag if it's not already set.
+            return ret;
+        }
+        len -= space_available;
+        dataptr += space_available;
+
+        // Now that the send buffer is maxed out, lets wait for at some of it to drain out
+        // TODO: The yield reason should not be a full flush. Just wait for tcp_sent!
+        tcp_output(cli_con->printed_circuit_board);
+        if (ret = sub_task_yield(WS_T_YIELD_REASON_FLUSH, cli_con->task)) {
+            return ret;
+        }
+    }
+    tcp_write(cli_con->printed_circuit_board, dataptr, len, apiflags);
+
+    //*countdown = TCP_SND_BUF - tcp_sndbuf(cli_con->printed_circuit_board);
+    return ERR_OK;
 }
 
 void ws_t_write_barrier(ws_cliant_con* cli_con) {
@@ -250,6 +303,7 @@ void ws_t_write_barrier(ws_cliant_con* cli_con) {
     //       of countdown if we can make the tcp_sent callback not suck.
 
     while (cli_con->printed_circuit_board->snd_queuelen) {
+        // TODO: Propogate errors returned by sub_task_yield
         sub_task_yield(WS_T_YIELD_REASON_FLUSH, cli_con->task);
     }
 }
@@ -271,7 +325,7 @@ void ws_t_wake(ws_cliant_con* cli_con) {
                     return; // Nothing to read yet.
                 }
                 // The task is yielding for more data, we have some now, so lets continue.
-                cli_con->task_yield_reason = sub_task_continue(cli_con->task, cli_con);
+                cli_con->task_yield_reason = sub_task_continue(cli_con->task, ERR_OK);
                 
                 // Inform the TCP stack of how many bytes we processed. Could be zero
                 // (if the task yields to peek then yields to flush for example).
@@ -280,12 +334,18 @@ void ws_t_wake(ws_cliant_con* cli_con) {
                 break;
             
             case WS_T_YIELD_REASON_FLUSH:
+                // Checking that tcp_sndbuf is at it's max would also work.
                 if (cli_con->printed_circuit_board->snd_queuelen) {
                     return; // Not flushed yet.
                 }
 
-                cli_con->task_yield_reason = sub_task_continue(cli_con->task, cli_con);
+                cli_con->task_yield_reason = sub_task_continue(cli_con->task, ERR_OK);
                 break;
+
+            case WS_T_YIELD_REASON_WAIT_FOR_ACK:
+                // TODO: Actually check that we got an ack! (maybe put this case in the ack handler?)
+                // For now, just wake it anyway. The handler should just spin and yield again if its not right.
+                cli_con->task_yield_reason = sub_task_continue(cli_con->task, ERR_OK);
 
             case WS_T_YIELD_REASON_END:
             default:
@@ -451,6 +511,8 @@ size_t do_ws_header(sub_task* task, void* args) {
         printf("Error: Thats not a websocket connection. TODO: handle this error\n");
     }
 
+    // TODO: tcp_write errors instead of blocking when it's queue is full.
+    //       WE HAVE A FIX FOR THIS!, use write ws_t_write!!!
     // Write the first part of the responce
     tcp_write(cli_con->printed_circuit_board, ws_responce1, sizeof(ws_responce1) - 1, TCP_WRITE_FLAG_MORE);
     
@@ -463,6 +525,7 @@ size_t do_ws_header(sub_task* task, void* args) {
     // TODO: tcp_write errors instead of blocking when it's queue is full.
     // Make it threaded. Check to see if tcp_sndbuf(li_con->printed_circuit_board);
     // is large enough.
+    //       WE HAVE A FIX FOR THIS!, use write ws_t_write!!!
     tcp_write(cli_con->printed_circuit_board, baseBuf, sizeof(baseBuf), TCP_WRITE_FLAG_MORE);
     
     // Write the first last of the responce
@@ -521,6 +584,27 @@ static err_t tcp_server_sent(void* arg, struct tcp_pcb* tpcb, u16_t len) {
     ws_cliant_con* cli_con = (ws_cliant_con*)arg;
 
     printf("tcp_server_sent %u\n", len);
+
+    // Do we need the len arg? Maybe not!
+    // Here is what I found:
+    // This sent/acked callback is called from tcp_input() soon after
+    // tcp_input() -> tcp_process() -> tcp_receive() updates PCB's snd_buf
+    // This means that len should be (pcb->snd_buf - old_snd_buf) as long as
+    // the value fits into 16 bits*. More useful would be (TCP_SND_BUF - pcb->snd_buf)
+    // to find the absolute number of bytes waiting to be ack'ed and freeing buffers that
+    // fall outside of that.
+    // 
+    // *The sent callback will be called multiple times if the value cant fit.
+    // See ugly special case code in tcp_in.c#tcp_input(); don't worry,
+    // that can't happen if LWIP_WND_SCALE is disabled!
+    #if LWIP_WND_SCALE
+    #error "You better check this before enabling LWIP_WND_SCALE!"
+    #endif
+
+    // call all the ack_callback's
+    if (cli_con->ack_callback.call) {
+        cli_con->ack_callback.call(cli_con->ack_callback.arg, len);
+    }
     
     ws_t_wake(cli_con);
 
