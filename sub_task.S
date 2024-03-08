@@ -47,6 +47,9 @@ sub_task_run:
                     // >>>===== Task RUNS =====>>>
 
                     // task_function returned
+                    // TODO: Test this trap! (happens incase sub_task_continue is called)!
+                    ldr	r3, =sub_task_trap
+                    push {r3}
 
                     // [Task] --> |Main|
                     ldr r3, [r5]    // r3 = sub_task->sp
@@ -102,6 +105,9 @@ sub_task_run:
     mov r6, r10
     mov r7, r11
     pop {r4-r7, pc} // Restore link register into PC
+
+    sub_task_trap:
+    pop {pc} // last time I did this, it caused a hard fault, so maybe it will here.
 
 
 .global sub_task_yield

@@ -123,7 +123,7 @@ err_t websocket_framinator_ack_callback(void* arg, u16_t len) {
     ws_framinator* framinator = (ws_framinator*) arg;
 
     while (len > 0) {
-        int flags_and_len = ((ws_buf_marker*) framinator->tail)->flags_and_len;
+        int flags_and_len = ((ws_buf_marker*) (framinator->buf + framinator->tail))->flags_and_len;
 
         if (flags_and_len & WS_MRK_FLAG_WRAP) {
             framinator->tail = 0;
@@ -139,7 +139,7 @@ err_t websocket_framinator_ack_callback(void* arg, u16_t len) {
                 advance -= new_scratch;
                 framinator->tail += advance;
 
-                ((ws_buf_marker*) framinator->tail)->flags_and_len =
+                ((ws_buf_marker*) (framinator->buf + framinator->tail))->flags_and_len =
                           WS_MRK_SCRATCH_LEN(new_scratch)
                         | WS_MRK_LEN(WS_MRK_GET_LEN(flags_and_len) - to_ack);
             }
@@ -177,7 +177,7 @@ void websocket_complete_and_send_frame(ws_framinator* ws_con) {
     uint16_t header = WS_HEADER_FIN | WS_HEADER_OPCODE(WS_HEADER_OPCODE_DATA);
     if (ws_con->current_payload_len >= WS_HEADER_PAYLOAD_LEN_USE_16BIT) {
         header |= WS_HEADER_PAYLOAD_LEN_USE_16BIT;
-        ws_frame_large* frame = ((ws_frame_large*)ws_con->current_marker);
+        ws_frame_large* frame = ((ws_frame_large*) (ws_con->buf + ws_con->current_marker));
 
         size_t send_len = ws_con->current_payload_len + (sizeof(ws_frame_large) - offsetof(ws_frame_large, header));
         
@@ -185,8 +185,8 @@ void websocket_complete_and_send_frame(ws_framinator* ws_con) {
             ws_con->head - ws_con->current_marker // total length
             - send_len) // subtract length to be sent
             | WS_MRK_LEN(send_len);
-        frame->header = header;
-        frame->e_payload_len = ws_con->current_payload_len;
+        frame->header = (header << 8) | (header >> 8); // TODO: oops! quick fix for little endian u16.
+        frame->e_payload_len = (ws_con->current_payload_len << 8) | (ws_con->current_payload_len >> 8); // TODO: oops! quick fix for little endian u16.
 
         ws_t_write(ws_con->con, &(frame->header),
                 send_len,
@@ -194,7 +194,7 @@ void websocket_complete_and_send_frame(ws_framinator* ws_con) {
 
     } else {
         header |= ws_con->current_payload_len;
-        ws_frame_small* frame = ((ws_frame_small*)ws_con->current_marker);
+        ws_frame_small* frame = ((ws_frame_small*) (ws_con->buf + ws_con->current_marker));
 
         size_t send_len = ws_con->current_payload_len + (sizeof(ws_frame_small) - offsetof(ws_frame_small, header));
         
@@ -202,7 +202,7 @@ void websocket_complete_and_send_frame(ws_framinator* ws_con) {
             ws_con->head - ws_con->current_marker // total length
             - send_len) // subtract length to be sent
             | WS_MRK_LEN(send_len);
-        frame->header = header;
+        frame->header = (header << 8) | (header >> 8); // TODO: oops! quick fix for little endian u16.
 
         ws_t_write(ws_con->con, &(frame->header),
                 send_len,
@@ -231,7 +231,7 @@ err_t websocket_write(ws_framinator* ws_con, char* buf, size_t len) {
                    - sizeof(ws_buf_marker) - ws_con->tail % alignof(ws_buf_marker);
             
             if (space <= 0) {
-                if (ret = (err_t) sub_task_yield(ws_con->con->task, WS_T_YIELD_REASON_WAIT_FOR_ACK)) {
+                if (ret = (size_t) sub_task_yield(WS_T_YIELD_REASON_WAIT_FOR_ACK, ws_con->con->task)) {
                     return ret;
                 }
                 continue;
@@ -277,7 +277,7 @@ err_t websocket_write(ws_framinator* ws_con, char* buf, size_t len) {
 
                 // Ensure that there is enough space at the start of the buffer.
                 while (ws_con->tail > ws_con->head || ws_con->tail < sizeof(ws_buf_marker) + WS_MAX_NO_MASK_HEADER_LEN) {
-                    if (ret = (err_t) sub_task_yield(ws_con->con->task, WS_T_YIELD_REASON_WAIT_FOR_ACK)) {
+                    if (ret = (size_t) sub_task_yield(WS_T_YIELD_REASON_WAIT_FOR_ACK, ws_con->con->task)) {
                         return ret;
                     }
                 }
@@ -330,7 +330,7 @@ err_t websocket_write(ws_framinator* ws_con, char* buf, size_t len) {
 
                     // Ensure that there is enough space at the start of the buffer.
                     while (ws_con->tail > ws_con->head && ws_con->tail - ws_con->head < sizeof(ws_buf_marker) + WS_MAX_NO_MASK_HEADER_LEN) {
-                        if (ret = (err_t) sub_task_yield(ws_con->con->task, WS_T_YIELD_REASON_WAIT_FOR_ACK)) {
+                        if (ret = (size_t) sub_task_yield(WS_T_YIELD_REASON_WAIT_FOR_ACK, ws_con->con->task)) {
                             return ret;
                         }
                     }
@@ -366,7 +366,7 @@ err_t websocket_write(ws_framinator* ws_con, char* buf, size_t len) {
 }
 
 err_t websocket_flush(ws_framinator* ws_con) {
-    size_t ret;
+    err_t ret;
 
     if (ws_con->current_payload_len > 0) {
         websocket_complete_and_send_frame(ws_con);
@@ -374,7 +374,7 @@ err_t websocket_flush(ws_framinator* ws_con) {
     
     // Ensure that there is enough space at the start of the buffer.
     while (ws_con->tail != ws_con->head) {
-        if (ret = (err_t) sub_task_yield(ws_con->con->task, WS_T_YIELD_REASON_WAIT_FOR_ACK)) {
+        if (ret = (size_t) sub_task_yield(WS_T_YIELD_REASON_WAIT_FOR_ACK, ws_con->con->task)) {
             return ret;
         }
     }

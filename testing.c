@@ -262,7 +262,7 @@ err_t ws_t_write(ws_cliant_con* cli_con, void* dataptr, size_t len, u8_t apiflag
     while (tcp_sndbuf(cli_con->printed_circuit_board) == 0) {
         // TODO: The yield reason should not be a full flush. Just wait for tcp_sent!
         tcp_output(cli_con->printed_circuit_board);
-        if (ret = (err_t) sub_task_yield(WS_T_YIELD_REASON_FLUSH, cli_con->task)) {
+        if (ret = (size_t) sub_task_yield(WS_T_YIELD_REASON_FLUSH, cli_con->task)) {
             return ret;
         }
     }
@@ -283,7 +283,7 @@ err_t ws_t_write(ws_cliant_con* cli_con, void* dataptr, size_t len, u8_t apiflag
         // Now that the send buffer is maxed out, lets wait for at some of it to drain out
         // TODO: The yield reason should not be a full flush. Just wait for tcp_sent!
         tcp_output(cli_con->printed_circuit_board);
-        if (ret = (err_t) sub_task_yield(WS_T_YIELD_REASON_FLUSH, cli_con->task)) {
+        if (ret = (size_t) sub_task_yield(WS_T_YIELD_REASON_FLUSH, cli_con->task)) {
             return ret;
         }
     }
@@ -346,6 +346,7 @@ void ws_t_wake(ws_cliant_con* cli_con) {
                 // TODO: Actually check that we got an ack! (maybe put this case in the ack handler?)
                 // For now, just wake it anyway. The handler should just spin and yield again if its not right.
                 cli_con->task_yield_reason = sub_task_continue(cli_con->task, ERR_OK);
+                return;
 
             case WS_T_YIELD_REASON_END:
             default:
@@ -541,8 +542,21 @@ size_t do_ws_header(sub_task* task, void* args) {
     ws_t_write_barrier(cli_con);
 
     DEBUG_printf("Header sent.\n");
+
+    ws_framinator framinator;
+    websocket_initialize_framinator(&framinator, cli_con);
+
+    char cool_message[] = "The PI Pico now has WebSockets!\n";
+    websocket_write(&framinator, cool_message, sizeof(cool_message) - 1); // subtract the null char
+
+    websocket_write(&framinator, cool_message, sizeof(cool_message) - 1); // subtract the null char
+    websocket_flush(&framinator);
+
     while (true) {
         printf("%c", *ws_t_read(cli_con, 1));
+
+        // o god. I wanted to write messages in a loop, but we need a threaded sleep!
+        //sleep_ms(1000);
     }
 
     return WS_T_YIELD_REASON_END; // TODO: Do more stuff with this task? Will a new task be started?
@@ -551,7 +565,7 @@ size_t do_ws_header(sub_task* task, void* args) {
 // ============= BETTER, BUT STILL KINDA BAD! =============
 // TODO: REFACTOR!
 
-static err_t tcp_server_result(void *arg, int status) {
+static err_t tcp_cli_con_result(void *arg, int status) {
     ws_cliant_con* cli_con = (ws_cliant_con*)arg;
     if (status == 0) {
         DEBUG_printf("test success\n");
@@ -574,19 +588,16 @@ static err_t tcp_server_result(void *arg, int status) {
         }
         cli_con->printed_circuit_board = NULL;
     }
-    //TODO: move server deconstruction to its own function/struct
-    if (cli_con->server_pcb) {
-        tcp_arg(cli_con->server_pcb, NULL);
-        tcp_close(cli_con->server_pcb);
-        cli_con->server_pcb = NULL;
-    }
+
+    sub_task_continue(cli_con->task, ERR_CLSD);
+
     return err;
 }
 
-static err_t tcp_server_sent(void* arg, struct tcp_pcb* tpcb, u16_t len) {
+static err_t tcp_cli_con_sent(void* arg, struct tcp_pcb* tpcb, u16_t len) {
     ws_cliant_con* cli_con = (ws_cliant_con*)arg;
 
-    printf("tcp_server_sent %u\n", len);
+    printf("tcp_cli_con_sent %u\n", len);
 
     // Do we need the len arg? Maybe not!
     // Here is what I found:
@@ -614,11 +625,11 @@ static err_t tcp_server_sent(void* arg, struct tcp_pcb* tpcb, u16_t len) {
     return ERR_OK;
 }
 
-err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) {
+err_t tcp_cli_con_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) {
     ws_cliant_con* cli_con = (ws_cliant_con*)arg;
     if (!p) {
         // cliant closed the connection
-        return tcp_server_result(arg, -1);
+        return tcp_cli_con_result(arg, -1);
     }
     // this method is callback from lwIP, so cyw43_arch_lwip_begin is not required, however you
     // can use this method to cause an assertion in debug mode, if this method is called when
@@ -629,7 +640,7 @@ err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
         return ERR_OK;
     }
 
-    DEBUG_printf("tcp_server_recv %d err %d\n", p->tot_len, err);
+    DEBUG_printf("tcp_cli_con_recv %d err %d\n", p->tot_len, err);
 
     // We might have some un-processed pbufs if the subtask yielded for some other reason, stack the new ones on top.
     if (cli_con->p_current) {
@@ -645,16 +656,20 @@ err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
     return ERR_OK;
 }
 
-static err_t tcp_server_poll(void *arg, struct tcp_pcb *tpcb) {
-    DEBUG_printf("tcp_server_poll_fn\n");
+static err_t tcp_cli_con_poll(void *arg, struct tcp_pcb *tpcb) {
+    // DEBUG_printf("tcp_cli_con_poll_fn\n");
     // Basically a 10 second timeout for now.
-    return tcp_server_result(arg, -1);
+    
+    // TODO: implement connection timeouts.
+    // return tcp_cli_con_result(arg, -1);
+    
+    return ERR_OK;
 }
 
-static void tcp_server_err(void *arg, err_t err) {
+static void tcp_cli_con_err(void *arg, err_t err) {
     if (err != ERR_ABRT) {
         DEBUG_printf("tcp_client_err_fn %d\n", err);
-        tcp_server_result(arg, err);
+        tcp_cli_con_result(arg, err);
     }
 }
 
@@ -662,11 +677,12 @@ static void tcp_server_err(void *arg, err_t err) {
 // ================ CLIANT CONNECTION ACCEPTER ================
 
 // goes in ---> tcp_accept()
+// A new client connection is accepted.
 static err_t tcp_server_accept(void *arg, struct tcp_pcb *client_pcb, err_t err) {
     ws_cliant_con* cli_con = (ws_cliant_con*)arg;
     if (err != ERR_OK || client_pcb == NULL) {
         DEBUG_printf("Failure in accept\n");
-        tcp_server_result(arg, err);
+        tcp_cli_con_result(arg, err);
         return ERR_VAL;
     }
     DEBUG_printf("Client connected\n");
@@ -675,10 +691,10 @@ static err_t tcp_server_accept(void *arg, struct tcp_pcb *client_pcb, err_t err)
     cli_con->task = task_ws_header; // TODO: make the task more local to the connection
 
     tcp_arg(client_pcb, cli_con);
-    tcp_sent(client_pcb, tcp_server_sent);
-    tcp_recv(client_pcb, tcp_server_recv);
-    tcp_poll(client_pcb, tcp_server_poll, 20); // 10 second timeout (20 "TCP coarse grained timer shots")
-    tcp_err(client_pcb, tcp_server_err);
+    tcp_sent(client_pcb, tcp_cli_con_sent);
+    tcp_recv(client_pcb, tcp_cli_con_recv);
+    tcp_poll(client_pcb, tcp_cli_con_poll, 2); // 1 second polling (2 "TCP coarse grained timer shots")
+    tcp_err(client_pcb, tcp_cli_con_err);
 
     // It will just run until it needs bytes and wait
     cli_con->task_yield_reason = sub_task_run(cli_con->task, do_ws_header, cli_con);
@@ -727,10 +743,17 @@ void run_tcp_server_test() {
     }
 
     if (!tcp_server_open(cli_con)) {
-        tcp_server_result(cli_con, -1);
+        tcp_cli_con_result(cli_con, -1);
         return;
     }
     // TODO: deallocate ws_cliant_con later
+
+    //TODO: move server deconstruction to its own function/struct
+    /*if (cli_con->server_pcb) {
+        tcp_arg(cli_con->server_pcb, NULL);
+        tcp_close(cli_con->server_pcb);
+        cli_con->server_pcb = NULL;
+    }*/
 }
 
 int main() {
@@ -854,6 +877,7 @@ int main() {
         // TODO: What happens if the wifi link goes down? will the server/connections error out?
         // should we check and re-initialize it?
     }
+
     cyw43_arch_deinit();
 }
 
