@@ -86,20 +86,15 @@ typedef struct ws_cliant_con_ {
 
     ws_ack_callback ack_callback;
 
-    // fill this buffer with the requested processable size
-    // TODO: Now that we save pbufs for later and are not forced to process all of them in the tcp_recv callback,
-    //       Maybe we should refactor/remove this simple buffer.
-    char* buf;
-    size_t buf_size;
-    size_t buf_total_size;
-
     // Holds NULL or points to a chain pbufs accumulated by our tcp_recv callback
     struct pbuf* p_current;
     // Count the data we have processed so we can call tcp_receved in one shot, usually after a yield.
     size_t recved_current;
 
     // Basically a thread that is handling a single connection.
-    // TODO: Multiple connections?
+    // TODO: Multiple connections!
+    // TODO: Support multiple threads. Maybe the connection should only track threads that
+    //       are waiting for it. Some users might want a reader and writer thread.
     sub_task* task;
     int task_yield_reason;
 
@@ -115,57 +110,26 @@ void set_ack_callback(ws_cliant_con* cli_con, err_t (*call)(void*, u16_t), void*
 /**
  * @brief Returns a condiguious byte array of the given size or null if we need to wait for more data.
  * 
- * @param cli_con 
- * @param size 
- * @return char* 
+ * @param cli_con
+ * @param buf 
+ * @param size size of buf (max size that can be read)
+ * @return The number of bytes actually read or an error code
  */
-char* ws_read(ws_cliant_con* cli_con, size_t size) {
+size_t ws_read(ws_cliant_con* cli_con, char* buf, size_t size) {
     if (!cli_con->p_current) {
-        return NULL; // We are still waiting for more data
-    }
-
-    if (cli_con->buf_size > size) {
-        printf("ERROR: Inconsistant read request! previous ask: %d, current ask: %d\n", cli_con->buf_size, size);
-    } else if (cli_con->buf_size == 0) {
-        // See if the first pbuf has enough bytes in it.
-        // That way we don't even need to use our own buffer.
-        if (cli_con->p_current->len >= size) {
-            char* payload = cli_con->p_current->payload;
-            cli_con->p_current = pbuf_free_header(cli_con->p_current, size);
-            cli_con->recved_current += size;
-            return payload;
-            #warning "USE AFTER FREE!!! WARNING! WARNING! WARNING!" // TODO: Fix this ASAP!
-        }
-    }
-
-    // ensure that enough space is allocated in the buffer
-    if (cli_con->buf_total_size < size) {
-        char* new_buf = realloc(cli_con->buf, size); // TODO: maybe allocate more than just the min amount?
-        if (new_buf) {
-            cli_con->buf_total_size = size;
-            cli_con->buf = new_buf;
-        } else {
-            printf("ERROR: Failed to allocate %d bytes\n", size);
-            return NULL;
-        }
+        return 0; // We are still waiting for more data
     }
 
     // fill the buffer until it reaches size or we run out of pbufs in the chain
     u16_t bytes_read = pbuf_copy_partial(
         cli_con->p_current,
-        cli_con->buf + cli_con->buf_size,
-        size - cli_con->buf_size,
+        buf,
+        size,
         0);
     cli_con->p_current = pbuf_free_header(cli_con->p_current, bytes_read);
-
-    cli_con->buf_size       += bytes_read;
     cli_con->recved_current += bytes_read;
 
-    if (cli_con->buf_size == size) {
-        cli_con->buf_size = 0;
-        return cli_con->buf;
-    }
-    return NULL; // We are still waiting for more data
+    return bytes_read; // We are still waiting for more data
 }
 
 /**
@@ -177,10 +141,6 @@ char* ws_read(ws_cliant_con* cli_con, size_t size) {
  * @return size_t Number of bytes available
  */
 size_t ws_peak(ws_cliant_con* cli_con, char** buf_ptr) {
-    if (cli_con->buf_size != 0) {
-        *buf_ptr = cli_con->buf;
-        return cli_con->buf_size;
-    }
     if (!cli_con->p_current) {
         *buf_ptr = NULL;
         return 0; // We are still waiting for more data
@@ -189,22 +149,7 @@ size_t ws_peak(ws_cliant_con* cli_con, char** buf_ptr) {
     return cli_con->p_current->len;
 }
 
-int ws_consume(ws_cliant_con* cli_con, size_t size) {
-    if (cli_con->buf_size > 0) {
-        // Not really sure why one would fail to read in the last call and
-        // then use ws_peak and ws_consume, but as long as the full buffer is consumed
-        // we can let this minor inconsistancy slide.
-        // TODO: Maybe add a warning?
-        if (cli_con->buf_size != size) {
-            printf("ERROR: Inconsistant consume request! previous ask: %d, current ask: %d\n", cli_con->buf_size, size);
-            return ERR_ARG;
-        }
-        cli_con->buf_size       -= size;
-        cli_con->recved_current += size;
-
-        return ERR_OK;
-    }
-    
+int ws_consume(ws_cliant_con* cli_con, size_t size) {    
     if (!cli_con->p_current) {
         if (size == 0) {
             return ERR_OK; // consume 0 bytes? well ok.
@@ -225,15 +170,27 @@ int ws_consume(ws_cliant_con* cli_con, size_t size) {
 /**
  * @brief Returns a condiguious byte array of the given size by yielding when more is needed.
  * 
- * @param cli_con 
- * @param size 
- * @return char* 
+ * @param cli_con
+ * @param buf 
+ * @param size size of buf (max size that can be read)
+ * @return The number of bytes actually read or an error code
  */
-char* ws_t_read(ws_cliant_con* cli_con, size_t size) {
-    char* ret;
-    while (!(ret = ws_read(cli_con, size))) {
-        // TODO: Propogate errors returned by sub_task_yield
-        sub_task_yield(WS_T_YIELD_REASON_READ, cli_con->task);
+size_t ws_t_read(ws_cliant_con* cli_con, char* buf, size_t size) {
+    size_t ret = 0;
+    
+    while (size > ret) {
+        size_t r = ws_read(cli_con, buf + ret, size - ret);
+        if (r < 0) {
+            return r;
+        }
+
+        ret += r;
+
+        if (size > ret) {
+            if (r = sub_task_yield(WS_T_YIELD_REASON_READ, cli_con->task)) {
+                return r;
+            }
+        }
     }
     return ret;
 }
@@ -314,6 +271,14 @@ void ws_t_write_barrier(ws_cliant_con* cli_con) {
  * @param cli_con 
  */
 void ws_t_wake(ws_cliant_con* cli_con) {
+    // FIXME: Just as with the sub_task_continue call that was in tcp_cli_con_result
+    //        we have no garentee that the subtask is in a yielded state!
+    //        Although ws_t_wake is called mostly from LWIP event handlers (aka
+    //        an interrupt context), the/a task is not started that way.
+    // TODO: Some kind of locking.
+    //       
+    //       If not running:
+    //       
 
     // We could have other reasons to resume pile up while we wait for the one we want.
     // This is unlikely as the task should be smart enough *not* to yield if it does not
@@ -443,6 +408,7 @@ int ws_confirm_tag(ws_cliant_con* cli_con, char* tag) {
 
 size_t do_ws_header(sub_task* task, void* args) {
     ws_cliant_con* cli_con = (ws_cliant_con*) args;
+    size_t ret;
     
     bl_str_selecter tag_finder;
 
@@ -495,8 +461,9 @@ size_t do_ws_header(sub_task* task, void* args) {
 
             case WS_H_FIELD_KEY:
 
-                buffer = ws_t_read(cli_con, WS_KEY_LEN);
-                memcpy(wsKey, buffer, WS_KEY_LEN);
+                if ((ret = ws_t_read(cli_con, wsKey, WS_KEY_LEN)) < 0) {
+                    return ret;
+                }
                 break;
 
             case BL_STR_NO_MATCH:
@@ -553,7 +520,11 @@ size_t do_ws_header(sub_task* task, void* args) {
     websocket_flush(&framinator);
 
     while (true) {
-        printf("%c", *ws_t_read(cli_con, 1));
+        char c;
+        if ((ret = ws_t_read(cli_con, &c, 1)) < 0) {
+            return ret;
+        }
+        printf("%c", c);
 
         // o god. I wanted to write messages in a loop, but we need a threaded sleep!
         //sleep_ms(1000);
@@ -589,7 +560,9 @@ static err_t tcp_cli_con_result(void *arg, int status) {
         cli_con->printed_circuit_board = NULL;
     }
 
-    sub_task_continue(cli_con->task, ERR_CLSD);
+    // FIXME: We can't just resume the task without any safety checking!
+    //        It might not even have been started yet. It mi
+    // TODO:  sub_task_continue(cli_con->task, ERR_CLSD);
 
     return err;
 }
