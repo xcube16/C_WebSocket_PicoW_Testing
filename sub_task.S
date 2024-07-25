@@ -73,7 +73,7 @@ sub_task_run:
 
     sub_task_run_resume:
 
-    // We are now in one of three situations:
+    // We are now in one of four situations:
     //
     // #1   'Call task_function' finished in one-shot (no yields) and we
     //      are like a normal function. Although the high-registers are
@@ -96,6 +96,9 @@ sub_task_run:
     //      We must restore the high-registers off the current (main) stack!
     //
     //      w0 holds sub_task_yield's pre_ret_code or task_function()'s return code
+    //
+    // #4   As above, so below. Unlike the other three cases, the *task* is resuming
+    //      from yield. Not |main|. // w0 holds void* args
 
     // Restore the high-registers off the current (main) stack
 
@@ -124,7 +127,7 @@ sub_task_yield:
     mov r7, r11
     push {r4-r7}
     // Push task resume address
-    ldr	r3, =sub_task_yield_resume
+    ldr	r3, =sub_task_run_resume
     push {r3}
 
     // [Task] --> |Main|
@@ -138,11 +141,4 @@ sub_task_yield:
 
     // >>>===== Main RUNS =====>>>
 
-    sub_task_yield_resume: // w0 holds void* args
-    // Restore the high-registers off the current (task) stack
-    pop {r4-r7}     /* Load the low registers.  */
-    mov r4, r8      /* Load the high registers. */
-    mov r5, r9
-    mov r6, r10
-    mov r7, r11
-    pop {r4-r7, pc} // Restore link register into PC
+    // When Main finishes it will end up at sub_task_run_resume
