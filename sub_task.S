@@ -66,8 +66,8 @@ sub_task_run:
 
                     mov r0, r2  // ready args
 
-                    pop {r5}    // Pop PC from stack ---> sub_task_yield will handle it from here
-                    mov pc, r5  // TODO: FIXME: Why can't we do pop {pc} ?!?!
+                    // Wow! What a coincidence! We are right above sub_task_run_resume
+                    // so we didn't need to push and now pop sub_task_run_resume
 
                     // >>>===== Task RUNS =====>>>
 
@@ -126,9 +126,8 @@ sub_task_yield:
     mov r6, r10
     mov r7, r11
     push {r4-r7}
-    // Push task resume address
-    ldr	r3, =sub_task_run_resume
-    push {r3}
+
+    // No need to push resume address as we will land right above sub_task_run_resume anyway.
 
     // [Task] --> |Main|
     ldr r3, [r1]    // r3 = sub_task->sp
