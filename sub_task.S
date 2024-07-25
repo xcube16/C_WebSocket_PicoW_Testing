@@ -26,9 +26,10 @@ sub_task_run:
     mov r6, r10
     mov r7, r11
     push {r4-r7}
-    // Push main resume address
-    ldr	r3, =sub_task_run_resume
-    push {r3}
+
+    // Push main resume address TODO: delete comment
+    // ldr r3, =sub_task_run_resume
+    // push {r3}
 
     // |Main| --> [Task]
     ldr r3, [r0]    // r3 = sub_task->sp
@@ -57,8 +58,10 @@ sub_task_run:
                     str r4, [r5]
                     mov sp, r3
 
-                    pop {r5}    // Pop PC from stack ---> basically goes to sub_task_run_resume
-                    mov pc, r5  // TODO: FIXME: Why can't we do pop {pc} ?!?!
+                    // TODO: delete comment
+                    // pop {r5}    // Pop PC from stack ---> basically goes to sub_task_run_resume
+                    // mov pc, r5  // TODO: FIXME: Why can't we do pop {pc} ?!?!
+                    b sub_task_run_resume
 
     // else
     sub_task_run_task_null:
@@ -112,10 +115,10 @@ sub_task_run:
     sub_task_trap:
     pop {pc} // last time I did this, it caused a hard fault, so maybe it will here.
 
-
-.global sub_task_yield
+// TODO: remove
+.global sub_task_yield_old
 .thumb_func
-sub_task_yield:
+sub_task_yield_old:
     // w0 size_t pre_ret_code
     // w1 sub_task* current_task
 
