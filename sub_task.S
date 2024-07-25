@@ -27,11 +27,8 @@ sub_task_run:
     mov r7, r11
     push {r4-r7}
 
-    // Push main resume address TODO: delete comment
-    // ldr r3, =sub_task_run_resume
-    // push {r3}
-
-    // |Main| --> [Task]
+    // |Main| --> [Task]    (cases #1 through #1)
+    // [Task] --> |Main|    (case  #4)
     ldr r3, [r0]    // r3 = sub_task->sp
     mov r4, sp      // using r4 is ok because we restore high-registers anyway.
     str r4, [r0]
@@ -58,9 +55,6 @@ sub_task_run:
                     str r4, [r5]
                     mov sp, r3
 
-                    // TODO: delete comment
-                    // pop {r5}    // Pop PC from stack ---> basically goes to sub_task_run_resume
-                    // mov pc, r5  // TODO: FIXME: Why can't we do pop {pc} ?!?!
                     b sub_task_run_resume
 
     // else
@@ -114,33 +108,3 @@ sub_task_run:
 
     sub_task_trap:
     pop {pc} // last time I did this, it caused a hard fault, so maybe it will here.
-
-// TODO: remove
-.global sub_task_yield_old
-.thumb_func
-sub_task_yield_old:
-    // w0 size_t pre_ret_code
-    // w1 sub_task* current_task
-
-    // Store high-registers on current (task) stack
-    push {r4-r7, lr}   /* Store the low registers.  */
-    mov r4, r8         /* Store the high registers. */
-    mov r5, r9
-    mov r6, r10
-    mov r7, r11
-    push {r4-r7}
-
-    // No need to push resume address as we will land right above sub_task_run_resume anyway.
-
-    // [Task] --> |Main|
-    ldr r3, [r1]    // r3 = sub_task->sp
-    mov r4, sp      // using r4 is ok because we restore high-registers anyway.
-    str r4, [r1]
-    mov sp, r3
-
-    pop {r5}    // Pop PC from stack ---> sub_task_run will handle it from here
-    mov pc, r5  // TODO: FIXME: Why can't we do pop {pc} ?!?!
-
-    // >>>===== Main RUNS =====>>>
-
-    // When Main finishes it will end up at sub_task_run_resume

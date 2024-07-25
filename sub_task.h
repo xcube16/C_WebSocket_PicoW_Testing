@@ -37,6 +37,11 @@ typedef struct sub_task_ {
  * and have new data when resumed.
  * 
  *  TODO: How TF does the caller know when the task is done!?!??!?!?
+ *        Had this crazy idea. What happens if it gets called anyway? Instead of sub_task_yield?
+ *        Turns out it actually almost works! sub_task_yield's assembly was very much like sub_task_run.
+ *        So I combined them and it even saves some bytes on the stack as everything resumes
+ *        to the exact same location! Wow!
+ *  TODO: Rename low level sub_task_run to sub_task_switch or something.
  * 
  * @param task 
  * @param task_function task function pointer or null for resume
