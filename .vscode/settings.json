@@ -41,6 +41,7 @@
         "tcp.h": "c",
         "limits": "c",
         "pico.h": "c",
-        "mutex.h": "c"
+        "mutex.h": "c",
+        "lock_core.h": "c"
     }
 }
