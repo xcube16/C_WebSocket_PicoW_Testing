@@ -39,6 +39,8 @@
         "string.h": "c",
         "sub_task.h": "c",
         "tcp.h": "c",
-        "limits": "c"
+        "limits": "c",
+        "pico.h": "c",
+        "mutex.h": "c"
     }
 }
