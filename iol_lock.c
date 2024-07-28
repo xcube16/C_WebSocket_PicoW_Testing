@@ -36,7 +36,7 @@ bool iol_trylock(iol_lock_obj* lock) {
     return locked;
 }
 
-void iol_continue(iol_lock_obj* lock) {
+void iol_continue(iol_lock_obj* lock, size_t err) {
     while (true) {
 
         if (!iol_trylock(lock)) {
@@ -45,7 +45,7 @@ void iol_continue(iol_lock_obj* lock) {
             break;
         }
 
-        lock->waiting_reason = sub_task_continue(lock->waiting_task, (void*) 0/*no error*/);
+        lock->waiting_reason = sub_task_continue(lock->waiting_task, (void*) err);
 
         iol_unlock(lock);
 
@@ -67,12 +67,12 @@ void iol_continue(iol_lock_obj* lock) {
  * @return true
  * @return false
  */
-int iol_notify(iol_lock_obj* lock, size_t reason) {
+int iol_notify(iol_lock_obj* lock, size_t reason, size_t err) {
     if (lock->waiting_reason != reason) {
         return 1;
     }
 
-    iol_continue(lock);
+    iol_continue(lock, err);
 }
 
 /**
@@ -108,7 +108,7 @@ int iol_task_run(
 
     if (lock->check_reason(lock->user_obj, lock->waiting_reason)) {
         // An interrupt must have came in just as the task was finishing.
-        iol_continue(lock);
+        iol_continue(lock, 0/*no error*/);
     }
 
     return 0;

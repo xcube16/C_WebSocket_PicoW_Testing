@@ -114,6 +114,8 @@ typedef struct ws_cliant_con_ {
 
     // TODO: better WS_T_YIELD_REASON_WAIT_FOR_ACK
     bool notify_ack;
+    // TODO: FIXME: active_err only stores the last error
+    size_t active_err;
 
 } ws_cliant_con;
 
@@ -701,6 +703,7 @@ void reset_cli_con_for_new_client(ws_cliant_con* cli_con) {
     cli_con->printed_circuit_board = NULL;
     cli_con->recved_current = 0;
     cli_con->task = NULL;
+    cli_con->active_err = 0;
 }
 
 // goes in ---> tcp_accept()
