@@ -20,7 +20,7 @@ add_executable(testing
     bufferless_str.c
     #lwipopts.h
     sub_task.S
-    io_lock.c
+    iol_lock.c
 )
 
 pico_set_program_name(testing "PICO_TESTING")

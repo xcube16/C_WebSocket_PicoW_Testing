@@ -187,7 +187,7 @@ size_t ws_t_read(ws_cliant_con* cli_con, char* buf, size_t size) {
         ret += r;
 
         if (size > ret) {
-            if (r = sub_task_yield(WS_T_YIELD_REASON_READ, cli_con->task)) {
+            if (r = (size_t) sub_task_yield(WS_T_YIELD_REASON_READ, cli_con->task)) {
                 return r;
             }
         }

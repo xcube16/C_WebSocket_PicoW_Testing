@@ -1,30 +1,12 @@
 
-#include "sub_task.h"
+#include "iol_lock.h"
 
+#include "pico/stdlib.h"
 #include "pico/mutex.h"
-
-
-#define IOL_YIELD_REASON_END 0
 
 // As mutex resources are limited, just have one global mutex to protect the
 // lock/unlock mechanisms from multi-core and/or interrupt speggetti.
 mutex_t global_core_lock;
-
-
-typedef struct iol_lock_obj_t {
-    // The task that is waiting to process an I/O operation
-    sub_task* waiting_task;
-
-    bool (*check_reason)(size_t reason);
-
-    // What is the task waiting for?
-    void* waiting_reason;
-
-    // Protect the task from being continued while it is already running
-    // This would result in upside-down-world! Don't go to upside-down-world;
-    // don't continue an already running task.
-    bool locked;
-} iol_lock_obj;
 
 /**
  * @brief Just an ugly global init function for global variables of horable globalness
@@ -63,7 +45,7 @@ void iol_continue(iol_lock_obj* lock) {
             break;
         }
 
-        lock->waiting_reason = sub_task_continue(lock->waiting_task, 0/*no error*/);
+        lock->waiting_reason = sub_task_continue(lock->waiting_task, (void*) 0/*no error*/);
 
         iol_unlock(lock);
 
@@ -99,7 +81,7 @@ int iol_notify(iol_lock_obj* lock, size_t reason) {
  * @param lock
  * @return int
  */
-int iol_task_run(iol_lock_obj* lock, bool (*check_reason)(size_t reason), sub_task* task, void* (*task_function)(sub_task*, void*), void* args) {
+int iol_task_run(iol_lock_obj* lock, bool (*check_reason)(size_t reason), sub_task* task, size_t (*task_function)(sub_task*, void*), void* args) {
     lock->waiting_task = task;
     lock->check_reason = check_reason;
     lock->waiting_reason = 0;

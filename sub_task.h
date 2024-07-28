@@ -60,7 +60,7 @@ size_t sub_task_run(sub_task* task, size_t (*task_function)(sub_task*, void*), v
  * @return void* ... and the data comes out here!
  */
 static inline void* sub_task_yield(size_t pre_ret_code, sub_task* current_task) {
-    return sub_task_run(current_task, NULL, pre_ret_code);
+    return (void*) sub_task_run(current_task, NULL, (void*) pre_ret_code);
 }
 
 static inline size_t sub_task_continue(sub_task* task, void* args) {

@@ -42,6 +42,12 @@
         "limits": "c",
         "pico.h": "c",
         "mutex.h": "c",
-        "lock_core.h": "c"
+        "lock_core.h": "c",
+        "cmath": "c",
+        "compare": "c",
+        "concepts": "c",
+        "exception": "c",
+        "type_traits": "c",
+        "*.tcc": "c"
     }
 }
