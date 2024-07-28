@@ -9,6 +9,7 @@
 
 #include "bufferless_str.h"
 #include "sub_task.h"
+#include "iol_lock.h"
 
 #include "mbedtls/sha1.h"
 
@@ -70,7 +71,6 @@ const char ws_uuid[] = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 // ================ CLIANT CONNECTION ================
 
-#define WS_T_YIELD_REASON_END 0
 #define WS_T_YIELD_REASON_READ 1
 #define WS_T_YIELD_REASON_FLUSH 2
 #define WS_T_YIELD_REASON_WAIT_FOR_ACK 3
@@ -96,7 +96,10 @@ typedef struct ws_cliant_con_ {
     // TODO: Support multiple threads. Maybe the connection should only track threads that
     //       are waiting for it. Some users might want a reader and writer thread.
     sub_task* task;
-    int task_yield_reason;
+    iol_lock_obj io_task;
+
+    // TODO: better WS_T_YIELD_REASON_WAIT_FOR_ACK
+    bool notify_ack;
 
 } ws_cliant_con;
 
@@ -187,6 +190,16 @@ size_t ws_t_read(ws_cliant_con* cli_con, char* buf, size_t size) {
         ret += r;
 
         if (size > ret) {
+
+            // Inform the TCP stack of how many bytes we processed. Could be zero
+            // (if the task yields to peek then yields to flush for example).
+            // TODO: Find a better place to put this ACK. We may want to do it more often for example,
+            // if a large volume of data is being sent and we are just barly keeping up. Once
+            // enough data has not been acked (but we have not hit this point, aka yielded for more because we slow).
+            // The connection may hickup resulting in a lag spike (or worse?) when it could smoothly chug along.
+            tcp_recved(cli_con->printed_circuit_board, cli_con->recved_current);
+            cli_con->recved_current = 0;
+
             if (r = (size_t) sub_task_yield(WS_T_YIELD_REASON_READ, cli_con->task)) {
                 return r;
             }
@@ -206,6 +219,16 @@ size_t ws_t_read(ws_cliant_con* cli_con, char* buf, size_t size) {
 size_t ws_t_peak(ws_cliant_con* cli_con, char** buf_ptr) {
     size_t ret;
     while (!(ret = ws_peak(cli_con, buf_ptr))) {
+
+        // Inform the TCP stack of how many bytes we processed. Could be zero
+        // (if the task yields to peek then yields to flush for example).
+        // TODO: Find a better place to put this ACK. We may want to do it more often for example,
+        // if a large volume of data is being sent and we are just barly keeping up. Once
+        // enough data has not been acked (but we have not hit this point, aka yielded for more because we slow).
+        // The connection may hickup resulting in a lag spike (or worse?) when it could smoothly chug along.
+        tcp_recved(cli_con->printed_circuit_board, cli_con->recved_current);
+        cli_con->recved_current = 0;
+
         // TODO: Propogate errors returned by sub_task_yield
         sub_task_yield(WS_T_YIELD_REASON_READ, cli_con->task);
     }
@@ -265,59 +288,28 @@ void ws_t_write_barrier(ws_cliant_con* cli_con) {
     }
 }
 
-/**
- * @brief Called when an event has happened that might be able to wake up a yielded task
- * 
- * @param cli_con 
- */
-void ws_t_wake(ws_cliant_con* cli_con) {
-    // FIXME: Just as with the sub_task_continue call that was in tcp_cli_con_result
-    //        we have no garentee that the subtask is in a yielded state!
-    //        Although ws_t_wake is called mostly from LWIP event handlers (aka
-    //        an interrupt context), the/a task is not started that way.
-    // TODO: Some kind of locking.
-    //       
-    //       If not running:
-    //       
+bool ws_check_reason(void* user_obj, size_t reason) {
+    ws_cliant_con* cli_con = user_obj;
 
-    // We could have other reasons to resume pile up while we wait for the one we want.
-    // This is unlikely as the task should be smart enough *not* to yield if it does not
-    // need to. It does not hurt, although we might not even need this helper function.
-    while (true) {
-        switch (cli_con->task_yield_reason) {
-            case WS_T_YIELD_REASON_READ:
-                if (!cli_con->p_current) {
-                    return; // Nothing to read yet.
-                }
-                // The task is yielding for more data, we have some now, so lets continue.
-                cli_con->task_yield_reason = sub_task_continue(cli_con->task, ERR_OK);
-                
-                // Inform the TCP stack of how many bytes we processed. Could be zero
-                // (if the task yields to peek then yields to flush for example).
-                tcp_recved(cli_con->printed_circuit_board, cli_con->recved_current);
-                cli_con->recved_current = 0;
-                break;
-            
-            case WS_T_YIELD_REASON_FLUSH:
-                // Checking that tcp_sndbuf is at it's max would also work.
-                if (cli_con->printed_circuit_board->snd_queuelen) {
-                    return; // Not flushed yet.
-                }
+    switch (reason) {
+        case WS_T_YIELD_REASON_READ:
+            return cli_con->p_current;
+        
+        case WS_T_YIELD_REASON_FLUSH:
+            // When no more pbufs are in the send buffer, we are flushed. All of them have been ack'ed.
+            // Checking that tcp_sndbuf is at it's max would also work.
+            return !cli_con->printed_circuit_board->snd_queuelen;
 
-                cli_con->task_yield_reason = sub_task_continue(cli_con->task, ERR_OK);
-                break;
+        case WS_T_YIELD_REASON_WAIT_FOR_ACK:
+            // TODO: better WS_T_YIELD_REASON_WAIT_FOR_ACK
+            return cli_con->notify_ack;
 
-            case WS_T_YIELD_REASON_WAIT_FOR_ACK:
-                // TODO: Actually check that we got an ack! (maybe put this case in the ack handler?)
-                // For now, just wake it anyway. The handler should just spin and yield again if its not right.
-                cli_con->task_yield_reason = sub_task_continue(cli_con->task, ERR_OK);
-                return;
+        case IOL_YIELD_REASON_END:
+            return false; // ya, don't continue if we ended. That would cause a crash.
 
-            case WS_T_YIELD_REASON_END:
-            default:
-                DEBUG_printf("Done with WS task. TODO: Close the connection?\n");
-                return;
-        }
+        default:
+            DEBUG_printf("Unimplemented reason: %i\n", reason);
+            return false;
     }
 }
 
@@ -530,7 +522,7 @@ size_t do_ws_header(sub_task* task, void* args) {
         //sleep_ms(1000);
     }
 
-    return WS_T_YIELD_REASON_END; // TODO: Do more stuff with this task? Will a new task be started?
+    return IOL_YIELD_REASON_END; // TODO: Do more stuff with this task? Will a new task be started?
 }
 
 // ============= BETTER, BUT STILL KINDA BAD! =============
@@ -592,8 +584,11 @@ static err_t tcp_cli_con_sent(void* arg, struct tcp_pcb* tpcb, u16_t len) {
     if (cli_con->ack_callback.call) {
         cli_con->ack_callback.call(cli_con->ack_callback.arg, len);
     }
-    
-    ws_t_wake(cli_con);
+
+    cli_con->notify_ack = true;
+
+    iol_notify(&cli_con->io_task, WS_T_YIELD_REASON_WAIT_FOR_ACK);
+    iol_notify(&cli_con->io_task, WS_T_YIELD_REASON_FLUSH);
 
     return ERR_OK;
 }
@@ -622,7 +617,7 @@ err_t tcp_cli_con_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t er
         cli_con->p_current = p;
     }
 
-    ws_t_wake(cli_con);
+    iol_notify(&cli_con->io_task, WS_T_YIELD_REASON_READ);
 
     // pbufs get freed as we used them. No need to free them here.
 
@@ -670,7 +665,7 @@ static err_t tcp_server_accept(void *arg, struct tcp_pcb *client_pcb, err_t err)
     tcp_err(client_pcb, tcp_cli_con_err);
 
     // It will just run until it needs bytes and wait
-    cli_con->task_yield_reason = sub_task_run(cli_con->task, do_ws_header, cli_con);
+    iol_task_run(&cli_con->io_task, ws_check_reason, cli_con, cli_con->task, do_ws_header, cli_con);
 
     //return tcp_server_send_data(arg, cli_con->printed_circuit_board);
     return ERR_OK;
@@ -736,6 +731,8 @@ int main() {
     stdio_init_all();
 
     SUB_TASK_GLOBAL_INIT(task_ws_header)
+
+    iol_init(); // ugly global init thingy
 
     if (cyw43_arch_init_with_country(CYW43_COUNTRY_USA)) {
         printf("Wi-Fi init failed\n");

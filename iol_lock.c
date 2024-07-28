@@ -52,7 +52,7 @@ void iol_continue(iol_lock_obj* lock) {
         // Interrupts and other cores can now trigger notifications again.
         // Check and handle any we might have missed while locked.
 
-        if (!lock->check_reason(lock->waiting_reason)) {
+        if (!lock->check_reason(lock->user_obj, lock->waiting_reason)) {
             // Still waiting for a valid reason to resume or the task has ended.
             break;
         }
@@ -68,7 +68,7 @@ void iol_continue(iol_lock_obj* lock) {
  * @return false
  */
 int iol_notify(iol_lock_obj* lock, size_t reason) {
-    if (lock->waiting_reason == reason) {
+    if (lock->waiting_reason != reason) {
         return 1;
     }
 
@@ -81,8 +81,15 @@ int iol_notify(iol_lock_obj* lock, size_t reason) {
  * @param lock
  * @return int
  */
-int iol_task_run(iol_lock_obj* lock, bool (*check_reason)(size_t reason), sub_task* task, size_t (*task_function)(sub_task*, void*), void* args) {
+int iol_task_run(
+        iol_lock_obj* lock,
+        bool (*check_reason)(void* user_obj, size_t reason),
+        void* user_obj,
+        sub_task* task, size_t (*task_function)(sub_task*, void*),
+        void* args) {
+
     lock->waiting_task = task;
+    lock->user_obj = user_obj;
     lock->check_reason = check_reason;
     lock->waiting_reason = 0;
     lock->locked = false;
@@ -99,7 +106,7 @@ int iol_task_run(iol_lock_obj* lock, bool (*check_reason)(size_t reason), sub_ta
     // Interrupts and other cores can now trigger notifications again.
     // Check and handle any we might have missed while locked.
 
-    if (lock->check_reason(lock->waiting_reason)) {
+    if (lock->check_reason(lock->user_obj, lock->waiting_reason)) {
         // An interrupt must have came in just as the task was finishing.
         iol_continue(lock);
     }

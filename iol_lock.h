@@ -10,8 +10,9 @@
 typedef struct iol_lock_obj_t {
     // The task that is waiting to process an I/O operation
     sub_task* waiting_task;
+    void* user_obj;
 
-    bool (*check_reason)(size_t reason);
+    bool (*check_reason)(void* user_obj, size_t reason);
 
     // What is the task waiting for?
     size_t waiting_reason;
@@ -45,6 +46,11 @@ int iol_notify(iol_lock_obj* lock, size_t reason);
  * @param lock
  * @return int
  */
-int iol_task_run(iol_lock_obj* lock, bool (*check_reason)(size_t reason), sub_task* task, size_t (*task_function)(sub_task*, void*), void* args);
+int iol_task_run(
+        iol_lock_obj* lock,
+        bool (*check_reason)(void* user_obj, size_t reason),
+        void* user_obj,
+        sub_task* task, size_t (*task_function)(sub_task*, void*),
+        void* args);
 
 #endif

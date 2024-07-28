@@ -234,6 +234,7 @@ err_t websocket_write(ws_framinator* ws_con, char* buf, size_t len) {
                 if (ret = (size_t) sub_task_yield(WS_T_YIELD_REASON_WAIT_FOR_ACK, ws_con->con->task)) {
                     return ret;
                 }
+                ws_con->con->notify_ack = false;
                 continue;
             }
 
@@ -280,6 +281,7 @@ err_t websocket_write(ws_framinator* ws_con, char* buf, size_t len) {
                     if (ret = (size_t) sub_task_yield(WS_T_YIELD_REASON_WAIT_FOR_ACK, ws_con->con->task)) {
                         return ret;
                     }
+                    ws_con->con->notify_ack = false;
                 }
 
                 // >>> ADVANCE HEAD >>>
@@ -333,6 +335,7 @@ err_t websocket_write(ws_framinator* ws_con, char* buf, size_t len) {
                         if (ret = (size_t) sub_task_yield(WS_T_YIELD_REASON_WAIT_FOR_ACK, ws_con->con->task)) {
                             return ret;
                         }
+                        ws_con->con->notify_ack = false;
                     }
 
                     // >>> ADVANCE HEAD >>>
@@ -372,11 +375,12 @@ err_t websocket_flush(ws_framinator* ws_con) {
         websocket_complete_and_send_frame(ws_con);
     }
     
-    // Ensure that there is enough space at the start of the buffer.
+    // Wait for ACK until the entire buffer is flushed.
     while (ws_con->tail != ws_con->head) {
         if (ret = (size_t) sub_task_yield(WS_T_YIELD_REASON_WAIT_FOR_ACK, ws_con->con->task)) {
             return ret;
         }
+        ws_con->con->notify_ack = false;
     }
 
     // reset the buffer
