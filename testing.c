@@ -69,6 +69,20 @@ const char ws_responce2[] =
 
 const char ws_uuid[] = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
+const char ws_page_responce1[] =
+    "HTTP/1.1 200 OK\r\n"
+    "Content-Type: text/html; charset=UTF-8\r\n"
+    "Connection: \r\n"
+    "Content-Length: ";
+
+// TODO: Make the linker handle this with a normal HTML file
+const char ws_page_responce2[] =
+    "\r\n"
+    "\r\n";
+
+const char ws_page_body[] =
+    "<!doctype html><html><body>Test page. TODO: add a script to connet via websocket and display information</body></html>";
+
 // ================ CLIANT CONNECTION ================
 
 #define WS_T_YIELD_REASON_READ 1
@@ -132,6 +146,15 @@ size_t ws_read(ws_cliant_con* cli_con, char* buf, size_t size) {
     cli_con->p_current = pbuf_free_header(cli_con->p_current, bytes_read);
     cli_con->recved_current += bytes_read;
 
+    // Inform the TCP stack of how many bytes we processed. Could be zero
+    // (if the task yields to peek then yields to flush for example).
+    // TODO: Find a better place to put this ACK. We may want to do it more often for example,
+    // if a large volume of data is being sent and we are just barly keeping up. Once
+    // enough data has not been acked (but we have not hit this point, aka yielded for more because we slow).
+    // The connection may hickup resulting in a lag spike (or worse?) when it could smoothly chug along.
+    tcp_recved(cli_con->printed_circuit_board, cli_con->recved_current);
+    cli_con->recved_current = 0;
+
     return bytes_read; // We are still waiting for more data
 }
 
@@ -163,6 +186,16 @@ int ws_consume(ws_cliant_con* cli_con, size_t size) {
 
     cli_con->p_current = pbuf_free_header(cli_con->p_current, size);
     cli_con->recved_current += size;
+
+    // Inform the TCP stack of how many bytes we processed. Could be zero
+    // (if the task yields to peek then yields to flush for example).
+    // TODO: Find a better place to put this ACK. We may want to do it more often for example,
+    // if a large volume of data is being sent and we are just barly keeping up. Once
+    // enough data has not been acked (but we have not hit this point, aka yielded for more because we slow).
+    // The connection may hickup resulting in a lag spike (or worse?) when it could smoothly chug along.
+    tcp_recved(cli_con->printed_circuit_board, cli_con->recved_current);
+    cli_con->recved_current = 0;
+
     return ERR_OK;
 }
 
@@ -191,15 +224,6 @@ size_t ws_t_read(ws_cliant_con* cli_con, char* buf, size_t size) {
 
         if (size > ret) {
 
-            // Inform the TCP stack of how many bytes we processed. Could be zero
-            // (if the task yields to peek then yields to flush for example).
-            // TODO: Find a better place to put this ACK. We may want to do it more often for example,
-            // if a large volume of data is being sent and we are just barly keeping up. Once
-            // enough data has not been acked (but we have not hit this point, aka yielded for more because we slow).
-            // The connection may hickup resulting in a lag spike (or worse?) when it could smoothly chug along.
-            tcp_recved(cli_con->printed_circuit_board, cli_con->recved_current);
-            cli_con->recved_current = 0;
-
             if (r = (size_t) sub_task_yield(WS_T_YIELD_REASON_READ, cli_con->task)) {
                 return r;
             }
@@ -220,17 +244,10 @@ size_t ws_t_peak(ws_cliant_con* cli_con, char** buf_ptr) {
     size_t ret;
     while (!(ret = ws_peak(cli_con, buf_ptr))) {
 
-        // Inform the TCP stack of how many bytes we processed. Could be zero
-        // (if the task yields to peek then yields to flush for example).
-        // TODO: Find a better place to put this ACK. We may want to do it more often for example,
-        // if a large volume of data is being sent and we are just barly keeping up. Once
-        // enough data has not been acked (but we have not hit this point, aka yielded for more because we slow).
-        // The connection may hickup resulting in a lag spike (or worse?) when it could smoothly chug along.
-        tcp_recved(cli_con->printed_circuit_board, cli_con->recved_current);
-        cli_con->recved_current = 0;
-
-        // TODO: Propogate errors returned by sub_task_yield
-        sub_task_yield(WS_T_YIELD_REASON_READ, cli_con->task);
+        size_t err;
+        if (err = sub_task_yield(WS_T_YIELD_REASON_READ, cli_con->task)) {
+            return err;
+        }
     }
     return ret;
 }
@@ -240,11 +257,11 @@ err_t ws_t_write(ws_cliant_con* cli_con, void* dataptr, size_t len, u8_t apiflag
 
     // Wait until we have at least *some* space on the send buffer
     while (tcp_sndbuf(cli_con->printed_circuit_board) == 0) {
-        // TODO: The yield reason should not be a full flush. Just wait for tcp_sent!
         tcp_output(cli_con->printed_circuit_board);
-        if (ret = (size_t) sub_task_yield(WS_T_YIELD_REASON_FLUSH, cli_con->task)) {
+        if (ret = (size_t) sub_task_yield(WS_T_YIELD_REASON_WAIT_FOR_ACK, cli_con->task)) {
             return ret;
         }
+        cli_con->notify_ack = false;
     }
 
     while (tcp_sndbuf(cli_con->printed_circuit_board) < len) {
@@ -261,11 +278,11 @@ err_t ws_t_write(ws_cliant_con* cli_con, void* dataptr, size_t len, u8_t apiflag
         dataptr += space_available;
 
         // Now that the send buffer is maxed out, lets wait for at some of it to drain out
-        // TODO: The yield reason should not be a full flush. Just wait for tcp_sent!
         tcp_output(cli_con->printed_circuit_board);
-        if (ret = (size_t) sub_task_yield(WS_T_YIELD_REASON_FLUSH, cli_con->task)) {
+        if (ret = (size_t) sub_task_yield(WS_T_YIELD_REASON_WAIT_FOR_ACK, cli_con->task)) {
             return ret;
         }
+        cli_con->notify_ack = false;
     }
     tcp_write(cli_con->printed_circuit_board, dataptr, len, apiflags);
 
@@ -273,7 +290,7 @@ err_t ws_t_write(ws_cliant_con* cli_con, void* dataptr, size_t len, u8_t apiflag
     return ERR_OK;
 }
 
-void ws_t_write_barrier(ws_cliant_con* cli_con) {
+size_t ws_t_write_barrier(ws_cliant_con* cli_con) {
 
     // TODO: This is basically just a flush-the-entire-TCP function.
     //       Not very good, but it works. We will need a better system based
@@ -283,8 +300,10 @@ void ws_t_write_barrier(ws_cliant_con* cli_con) {
     //       of countdown if we can make the tcp_sent callback not suck.
 
     while (cli_con->printed_circuit_board->snd_queuelen) {
-        // TODO: Propogate errors returned by sub_task_yield
-        sub_task_yield(WS_T_YIELD_REASON_FLUSH, cli_con->task);
+        size_t ret;
+        if (ret = (size_t) sub_task_yield(WS_T_YIELD_REASON_FLUSH, cli_con->task)) {
+            return ret;
+        }
     }
 }
 
@@ -293,7 +312,7 @@ bool ws_check_reason(void* user_obj, size_t reason) {
 
     switch (reason) {
         case WS_T_YIELD_REASON_READ:
-            return cli_con->p_current;
+            return cli_con->p_current != NULL;
         
         case WS_T_YIELD_REASON_FLUSH:
             // When no more pbufs are in the send buffer, we are flushed. All of them have been ack'ed.
@@ -471,7 +490,33 @@ size_t do_ws_header(sub_task* task, void* args) {
     header_done:
 
     if (!websocket_upgrade) {
-        printf("Error: Thats not a websocket connection. TODO: handle this error\n");
+        printf("Normal HTTP request recieved.\n");
+
+        // TODO: For now we just assume the header is a valid HTTP 1.1 GET request.
+        
+        // Write the first part of the responce
+        ws_t_write(cli_con, ws_page_responce1, sizeof(ws_page_responce1) - 1, TCP_WRITE_FLAG_MORE);
+
+        char contentLenBuf[12];
+        sprintf(contentLenBuf, "%i", sizeof(ws_page_body) - 1);
+
+        ws_t_write(cli_con, contentLenBuf, strlen(contentLenBuf), TCP_WRITE_FLAG_MORE);
+        ws_t_write(cli_con, ws_page_responce2, sizeof(ws_page_responce2) - 1, TCP_WRITE_FLAG_MORE);
+        ws_t_write(cli_con, ws_page_body, sizeof(ws_page_body) - 1, 0);
+
+        // Flush the output? I am not really sure if this is needed or even wanted.
+        tcp_output(cli_con->printed_circuit_board);
+
+        DEBUG_printf("Header complete.\n");
+        ws_t_write_barrier(cli_con);
+
+        DEBUG_printf("Header sent.\n");
+
+        if (ret = tcp_close(cli_con->printed_circuit_board)) {
+            DEBUG_printf("TODO: Error while closing, handle this %i\n", ret);
+        }
+
+        return IOL_YIELD_REASON_END;
     }
 
     // TODO: tcp_write errors instead of blocking when it's queue is full.
@@ -644,10 +689,25 @@ static void tcp_cli_con_err(void *arg, err_t err) {
 
 // ================ CLIANT CONNECTION ACCEPTER ================
 
+void reset_cli_con_for_new_client(ws_cliant_con* cli_con) {
+    // TODO: DELETE THIS FUNCTION! When we support multiple clients, new objects will be allocated.
+    // For now, just zero out the client connection specific parts of our mega struct while
+    // not touching the server stuff.
+
+    cli_con->ack_callback.call = NULL;
+    // cli_con->io_task handled cleanly by iol_task_run
+    cli_con->notify_ack = 0;
+    cli_con->p_current = NULL;
+    cli_con->printed_circuit_board = NULL;
+    cli_con->recved_current = 0;
+    cli_con->task = NULL;
+}
+
 // goes in ---> tcp_accept()
 // A new client connection is accepted.
 static err_t tcp_server_accept(void *arg, struct tcp_pcb *client_pcb, err_t err) {
     ws_cliant_con* cli_con = (ws_cliant_con*)arg;
+    reset_cli_con_for_new_client(cli_con);
     if (err != ERR_OK || client_pcb == NULL) {
         DEBUG_printf("Failure in accept\n");
         tcp_cli_con_result(arg, err);

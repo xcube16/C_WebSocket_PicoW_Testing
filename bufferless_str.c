@@ -83,7 +83,7 @@ int decode_base64(base64_ctx* ctx, char* base64_buf, char* output_buf, int base6
     for (i = 0; i <= base64_len; i++) {
         if (i >= base64_len || base64_buf[i] == '=') {
             if (end || i < base64_len) {
-                switch (sub_i) { // TODO: FIX bit offsets
+                switch (sub_i) { 
                     case 3:
                         // bytes be like: [ ------AA AAAABBBB BBCCCCCC]
                         // wanted:                ^^ ^^^^^^^^ ^^^^^^
