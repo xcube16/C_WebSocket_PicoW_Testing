@@ -73,7 +73,7 @@ typedef struct ws_framinator_ {
     // Huristics:
     // 1. Small writes will be buffered
     // 2. large writes will flush previously buffered small stuff and it's self
-    // 3. 
+    // 3.
 
 
     // TODO: Timer that will go off after X amount of time has passed
@@ -146,7 +146,7 @@ err_t websocket_framinator_ack_callback(void* arg, u16_t len) {
             len -= to_ack;
         }
     }
-    
+
     return ERR_OK;
 }
 
@@ -170,7 +170,7 @@ err_t websocket_initialize_framinator(ws_framinator* framinator, ws_cliant_con* 
 }
 
 void websocket_complete_and_send_frame(ws_framinator* ws_con) {
-    
+
     // TODO: Compute number of scratch/no-ack bytes fromws_con->current_payload_len
     // and by assuming ws_con->head is the true end.
 
@@ -180,7 +180,7 @@ void websocket_complete_and_send_frame(ws_framinator* ws_con) {
         ws_frame_large* frame = ((ws_frame_large*) (ws_con->buf + ws_con->current_marker));
 
         size_t send_len = ws_con->current_payload_len + (sizeof(ws_frame_large) - offsetof(ws_frame_large, header));
-        
+
         frame->marker.flags_and_len = WS_MRK_SCRATCH_LEN(
             ws_con->head - ws_con->current_marker // total length
             - send_len) // subtract length to be sent
@@ -197,7 +197,7 @@ void websocket_complete_and_send_frame(ws_framinator* ws_con) {
         ws_frame_small* frame = ((ws_frame_small*) (ws_con->buf + ws_con->current_marker));
 
         size_t send_len = ws_con->current_payload_len + (sizeof(ws_frame_small) - offsetof(ws_frame_small, header));
-        
+
         frame->marker.flags_and_len = WS_MRK_SCRATCH_LEN(
             ws_con->head - ws_con->current_marker // total length
             - send_len) // subtract length to be sent
@@ -229,7 +229,7 @@ err_t websocket_write(ws_framinator* ws_con, char* buf, size_t len) {
             // make sure we can fit an aligned ws_buf_marker at the end.
             space = ws_con->tail - ws_con->head
                    - sizeof(ws_buf_marker) - ws_con->tail % alignof(ws_buf_marker);
-            
+
             if (space <= 0) {
                 if (ret = (size_t) sub_task_yield(WS_T_YIELD_REASON_WAIT_FOR_ACK, ws_con->con->task)) {
                     return ret;
@@ -294,7 +294,7 @@ err_t websocket_write(ws_framinator* ws_con, char* buf, size_t len) {
 
             } else if (ws_con->head >= ws_con->tail) {
                 // tail behind head
-                
+
                 // got handled above: if (space < WS_JUST_WRAP_ANYWAY_ITS_NOT_WORTH_IT_PAYLOAD_LEN)
 
                 // We have enough space for a frame right after this one.
@@ -319,7 +319,7 @@ err_t websocket_write(ws_framinator* ws_con, char* buf, size_t len) {
                 // empty space at the end of the buffer:
                 space = ws_con->tail - ws_con->head
                     - (sizeof(ws_buf_marker)); // save room for a wrap marker.
-                
+
                 if (space < sizeof(ws_buf_marker) + WS_MAX_NO_MASK_HEADER_LEN) {
                     // not enough space
 
@@ -374,7 +374,7 @@ err_t websocket_flush(ws_framinator* ws_con) {
     if (ws_con->current_payload_len > 0) {
         websocket_complete_and_send_frame(ws_con);
     }
-    
+
     // Wait for ACK until the entire buffer is flushed.
     while (ws_con->tail != ws_con->head) {
         if (ret = (size_t) sub_task_yield(WS_T_YIELD_REASON_WAIT_FOR_ACK, ws_con->con->task)) {

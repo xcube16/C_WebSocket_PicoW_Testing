@@ -126,9 +126,9 @@ void set_ack_callback(ws_cliant_con* cli_con, err_t (*call)(void*, u16_t), void*
 
 /**
  * @brief Returns a condiguious byte array of the given size or null if we need to wait for more data.
- * 
+ *
  * @param cli_con
- * @param buf 
+ * @param buf
  * @param size size of buf (max size that can be read)
  * @return The number of bytes actually read or an error code
  */
@@ -161,8 +161,8 @@ size_t ws_read(ws_cliant_con* cli_con, char* buf, size_t size) {
 /**
  * @brief Provides access to the next raw pbuf payload. Call ws_consume() or ws_read() to
  * actually advance the communication.
- * 
- * @param cli_con 
+ *
+ * @param cli_con
  * @param buf_ptr Pointer to a buffer. Will be set if the number of bytes is > 0
  * @return size_t Number of bytes available
  */
@@ -175,7 +175,7 @@ size_t ws_peak(ws_cliant_con* cli_con, char** buf_ptr) {
     return cli_con->p_current->len;
 }
 
-int ws_consume(ws_cliant_con* cli_con, size_t size) {    
+int ws_consume(ws_cliant_con* cli_con, size_t size) {
     if (!cli_con->p_current) {
         if (size == 0) {
             return ERR_OK; // consume 0 bytes? well ok.
@@ -205,15 +205,15 @@ int ws_consume(ws_cliant_con* cli_con, size_t size) {
 
 /**
  * @brief Returns a condiguious byte array of the given size by yielding when more is needed.
- * 
+ *
  * @param cli_con
- * @param buf 
+ * @param buf
  * @param size size of buf (max size that can be read)
  * @return The number of bytes actually read or an error code
  */
 size_t ws_t_read(ws_cliant_con* cli_con, char* buf, size_t size) {
     size_t ret = 0;
-    
+
     while (size > ret) {
         size_t r = ws_read(cli_con, buf + ret, size - ret);
         if (r < 0) {
@@ -235,8 +235,8 @@ size_t ws_t_read(ws_cliant_con* cli_con, char* buf, size_t size) {
 /**
  * @brief Provides access to the next raw pbuf payload. Call ws_consume() or ws_read() to
  * actually advance the communication. Threaded, yielding.
- * 
- * @param cli_con 
+ *
+ * @param cli_con
  * @param buf_ptr Pointer to a buffer. Will be set if the number of bytes is > 0
  * @return size_t Number of bytes available
  */
@@ -313,7 +313,7 @@ bool ws_check_reason(void* user_obj, size_t reason) {
     switch (reason) {
         case WS_T_YIELD_REASON_READ:
             return cli_con->p_current != NULL;
-        
+
         case WS_T_YIELD_REASON_FLUSH:
             // When no more pbufs are in the send buffer, we are flushed. All of them have been ack'ed.
             // Checking that tcp_sndbuf is at it's max would also work.
@@ -420,7 +420,7 @@ int ws_confirm_tag(ws_cliant_con* cli_con, char* tag) {
 size_t do_ws_header(sub_task* task, void* args) {
     ws_cliant_con* cli_con = (ws_cliant_con*) args;
     size_t ret;
-    
+
     bl_str_selecter tag_finder;
 
     bool websocket_upgrade = false;
@@ -455,14 +455,14 @@ size_t do_ws_header(sub_task* task, void* args) {
             ws_consume(cli_con, i); // *munch!*
 
         } while(i == len); // If i == len, we have read part of the string, but have not hit the ':' yet
-        
+
         if (ws_eat_whitespace(cli_con)) { // eat the ": "
             DEBUG_printf("Unexpected line end.\n");
         }
 
         switch (selected) {
             case WS_H_FIELD_UPGRADE:
-                
+
                 if (ws_confirm_tag(cli_con, "websocket")) {
                     websocket_upgrade = true;
                 } else {
@@ -493,7 +493,7 @@ size_t do_ws_header(sub_task* task, void* args) {
         printf("Normal HTTP request recieved.\n");
 
         // TODO: For now we just assume the header is a valid HTTP 1.1 GET request.
-        
+
         // Write the first part of the responce
         ws_t_write(cli_con, ws_page_responce1, sizeof(ws_page_responce1) - 1, TCP_WRITE_FLAG_MORE);
 
@@ -523,7 +523,7 @@ size_t do_ws_header(sub_task* task, void* args) {
     //       WE HAVE A FIX FOR THIS!, use write ws_t_write!!!
     // Write the first part of the responce
     tcp_write(cli_con->printed_circuit_board, ws_responce1, sizeof(ws_responce1) - 1, TCP_WRITE_FLAG_MORE);
-    
+
     // Write the Accept key
     char hashBuf[20];
     char baseBuf[28];
@@ -535,7 +535,7 @@ size_t do_ws_header(sub_task* task, void* args) {
     // is large enough.
     //       WE HAVE A FIX FOR THIS!, use write ws_t_write!!!
     tcp_write(cli_con->printed_circuit_board, baseBuf, sizeof(baseBuf), TCP_WRITE_FLAG_MORE);
-    
+
     // Write the first last of the responce
     tcp_write(cli_con->printed_circuit_board, ws_responce2, sizeof(ws_responce2) - 1, 0);
 
@@ -580,7 +580,7 @@ static err_t tcp_cli_con_result(void *arg, int status) {
     } else {
         DEBUG_printf("test failed %d\n", status);
     }
-    
+
     err_t err = ERR_OK;
     if (cli_con->printed_circuit_board != NULL) {
         tcp_arg(cli_con->printed_circuit_board, NULL);
@@ -617,7 +617,7 @@ static err_t tcp_cli_con_sent(void* arg, struct tcp_pcb* tpcb, u16_t len) {
     // the value fits into 16 bits*. More useful would be (TCP_SND_BUF - pcb->snd_buf)
     // to find the absolute number of bytes waiting to be ack'ed and freeing buffers that
     // fall outside of that.
-    // 
+    //
     // *The sent callback will be called multiple times if the value cant fit.
     // See ugly special case code in tcp_in.c#tcp_input(); don't worry,
     // that can't happen if LWIP_WND_SCALE is disabled!
@@ -672,10 +672,10 @@ err_t tcp_cli_con_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t er
 static err_t tcp_cli_con_poll(void *arg, struct tcp_pcb *tpcb) {
     // DEBUG_printf("tcp_cli_con_poll_fn\n");
     // Basically a 10 second timeout for now.
-    
+
     // TODO: implement connection timeouts.
     // return tcp_cli_con_result(arg, -1);
-    
+
     return ERR_OK;
 }
 
@@ -802,10 +802,10 @@ int main() {
     }
 
     cyw43_arch_enable_sta_mode();
-    
+
     if (cyw43_arch_wifi_connect_async(
         wifi_ssid,
-        wifi_password, 
+        wifi_password,
         CYW43_AUTH_WPA2_MIXED_PSK)) {
             printf("cyw43_arch_wifi_connect_async failed\n");
             return -2;
@@ -816,7 +816,7 @@ int main() {
         //poll for now, TODO: use netif_set_status_callback();
         status = cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA);
         int ms = to_ms_since_boot(get_absolute_time());
-        
+
         int rate = 500;
         int on_time = rate / 2;
         switch (status) {
@@ -838,7 +838,7 @@ int main() {
 
                 if (cyw43_arch_wifi_connect_async(
                     wifi_ssid,
-                    wifi_password, 
+                    wifi_password,
                     CYW43_AUTH_WPA2_MIXED_PSK)) {
                         printf("cyw43_arch_wifi_connect_async failed\n");
                         return -2;
@@ -852,7 +852,7 @@ int main() {
         } else if (ms % on_time == 0) {
             cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
         }
-        
+
         if (status != status_old) {
             printf("Link status changed to: %s\n", cyw43_tcpip_link_status_name(status));
         }
@@ -868,7 +868,7 @@ int main() {
     //httpd_init();
 
     run_tcp_server_test();
-    
+
     while (true) {
 
         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);

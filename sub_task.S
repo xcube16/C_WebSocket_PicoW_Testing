@@ -83,7 +83,7 @@ sub_task_run:
     //      preserved according to the C call spec. These are not what we want.
     //      Restore the correct high-registers off the stack (main) that the last
     //      sub_task_run caller expects.
-    //      We must restore the high-registers off the current (main) stack! 
+    //      We must restore the high-registers off the current (main) stack!
     //
     // #3   The task called sub_task_yield. Although the correct main high-registers
     //      get restored at the end of task_function(), we are not at the end,

@@ -2,7 +2,7 @@
 #include "bufferless_str.h"
 
 int bl_str_select (bl_str_selecter* selecter, char* buf, int buf_len) {
-    
+
     int i = 0;
     const char* str = selecter->strs[selecter->list_index];
 
@@ -17,7 +17,7 @@ int bl_str_select (bl_str_selecter* selecter, char* buf, int buf_len) {
             i++;
             selecter->str_index++;
         } else {
-            
+
             do {
                 selecter->list_index++;
                 if (selecter->list_index >= selecter->strs_len) {
@@ -83,14 +83,14 @@ int decode_base64(base64_ctx* ctx, char* base64_buf, char* output_buf, int base6
     for (i = 0; i <= base64_len; i++) {
         if (i >= base64_len || base64_buf[i] == '=') {
             if (end || i < base64_len) {
-                switch (sub_i) { 
+                switch (sub_i) {
                     case 3:
                         // bytes be like: [ ------AA AAAABBBB BBCCCCCC]
                         // wanted:                ^^ ^^^^^^^^ ^^^^^^
                         output_buf[++byte_index] = (bytes >> 2) & 0xFF;
-                        
+
                         bytes >>= 6; // make bytes be like what case 2 expects
-                    
+
                     case 2:
                         // bytes be like: [ -------- ----AAAA AABBBBBB]
                         // wanted:                       ^^^^ ^^^^
@@ -104,7 +104,7 @@ int decode_base64(base64_ctx* ctx, char* base64_buf, char* output_buf, int base6
             continue;
         }
 
-        bytes <<= 6;    
+        bytes <<= 6;
         bytes |= base64bits(base64_buf[i]);
 
         sub_i = (sub_i + 1) & 0x03;
@@ -121,7 +121,7 @@ int decode_base64(base64_ctx* ctx, char* base64_buf, char* output_buf, int base6
 
 // TODO: pause/resume?
 int encode_base64(char* base64_buf, char* input_buf, int input_len) {
-    
+
     int i;
     int j;
 
