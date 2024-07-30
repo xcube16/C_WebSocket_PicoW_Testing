@@ -114,8 +114,6 @@ typedef struct ws_cliant_con_ {
 
     // TODO: better WS_T_YIELD_REASON_WAIT_FOR_ACK
     bool notify_ack;
-    // TODO: FIXME: active_err only stores the last error
-    size_t active_err;
 
 } ws_cliant_con;
 
@@ -247,7 +245,7 @@ size_t ws_t_peak(ws_cliant_con* cli_con, char** buf_ptr) {
     while (!(ret = ws_peak(cli_con, buf_ptr))) {
 
         size_t err;
-        if (err = sub_task_yield(WS_T_YIELD_REASON_READ, cli_con->task)) {
+        if (err = (size_t) sub_task_yield(WS_T_YIELD_REASON_READ, cli_con->task)) {
             return err;
         }
     }
@@ -309,8 +307,12 @@ size_t ws_t_write_barrier(ws_cliant_con* cli_con) {
     }
 }
 
-bool ws_check_reason(void* user_obj, size_t reason) {
+bool ws_check_reason(void* user_obj, size_t reason, size_t err) {
     ws_cliant_con* cli_con = user_obj;
+
+    if (reason && err) {
+        return true; // Let the task handle the error.
+    }
 
     switch (reason) {
         case WS_T_YIELD_REASON_READ:
@@ -419,9 +421,8 @@ int ws_confirm_tag(ws_cliant_con* cli_con, char* tag) {
     }
 }
 
-size_t do_ws_header(sub_task* task, void* args) {
-    ws_cliant_con* cli_con = (ws_cliant_con*) args;
-    size_t ret;
+size_t do_ws_header(ws_cliant_con* cli_con) {
+    int ret;
 
     bl_str_selecter tag_finder;
 
@@ -514,10 +515,6 @@ size_t do_ws_header(sub_task* task, void* args) {
 
         DEBUG_printf("Header sent.\n");
 
-        if (ret = tcp_close(cli_con->printed_circuit_board)) {
-            DEBUG_printf("TODO: Error while closing, handle this %i\n", ret);
-        }
-
         return IOL_YIELD_REASON_END;
     }
 
@@ -572,19 +569,18 @@ size_t do_ws_header(sub_task* task, void* args) {
     return IOL_YIELD_REASON_END; // TODO: Do more stuff with this task? Will a new task be started?
 }
 
-// ============= BETTER, BUT STILL KINDA BAD! =============
-// TODO: REFACTOR!
+err_t ws_cli_con_close(ws_cliant_con* cli_con, err_t status) {
 
-static err_t tcp_cli_con_result(void *arg, int status) {
-    ws_cliant_con* cli_con = (ws_cliant_con*)arg;
     if (status == 0) {
-        DEBUG_printf("test success\n");
+        DEBUG_printf("Connection closed\n");
     } else {
-        DEBUG_printf("test failed %d\n", status);
+        DEBUG_printf("Connection closed with error: %d\n", status);
     }
 
     err_t err = ERR_OK;
     if (cli_con->printed_circuit_board != NULL) {
+        // TODO: make it so that the task handles this.
+
         tcp_arg(cli_con->printed_circuit_board, NULL);
         tcp_poll(cli_con->printed_circuit_board, NULL, 0);
         tcp_sent(cli_con->printed_circuit_board, NULL);
@@ -599,12 +595,17 @@ static err_t tcp_cli_con_result(void *arg, int status) {
         cli_con->printed_circuit_board = NULL;
     }
 
-    // FIXME: We can't just resume the task without any safety checking!
-    //        It might not even have been started yet. It mi
-    // TODO:  sub_task_continue(cli_con->task, ERR_CLSD);
-
     return err;
 }
+
+size_t do_cli_con_task(sub_task* task, void* args) {
+    ws_cliant_con* cli_con = (ws_cliant_con*) args;
+
+    return ws_cli_con_close(cli_con, do_ws_header(cli_con));
+}
+
+// ============= BETTER, BUT STILL KINDA BAD! =============
+// TODO: REFACTOR!
 
 static err_t tcp_cli_con_sent(void* arg, struct tcp_pcb* tpcb, u16_t len) {
     ws_cliant_con* cli_con = (ws_cliant_con*)arg;
@@ -634,17 +635,37 @@ static err_t tcp_cli_con_sent(void* arg, struct tcp_pcb* tpcb, u16_t len) {
 
     cli_con->notify_ack = true;
 
-    iol_notify(&cli_con->io_task, WS_T_YIELD_REASON_WAIT_FOR_ACK);
-    iol_notify(&cli_con->io_task, WS_T_YIELD_REASON_FLUSH);
+    // TODO: FIXME: Handling multiple like this may cause a problem when the task
+    // waits for the first reason, and then waits for the second reason. Thus
+    // hitting one after the other right here in the same ACK!
+    iol_notify(&cli_con->io_task, WS_T_YIELD_REASON_WAIT_FOR_ACK, ERR_OK);
+    iol_notify(&cli_con->io_task, WS_T_YIELD_REASON_FLUSH, ERR_OK);
 
     return ERR_OK;
+}
+
+static void tcp_cli_con_err(void *arg, err_t err) {
+    if (err != ERR_ABRT) {
+        DEBUG_printf("tcp_client_err_fn %d\n", err);
+        ws_cliant_con* cli_con = (ws_cliant_con*)arg;
+
+        // TODO: FIXME: See reason why this is bad in ACK handler.
+        iol_notify(&cli_con->io_task, WS_T_YIELD_REASON_READ, err);
+        iol_notify(&cli_con->io_task, WS_T_YIELD_REASON_WAIT_FOR_ACK, err);
+        iol_notify(&cli_con->io_task, WS_T_YIELD_REASON_FLUSH, err);
+
+        // Now let the task cleanup the connection objects when it is ready.
+        // If we cleaned it up here while the task is in the middle of using them,
+        // it would be bad (use after free, or worse).
+    }
 }
 
 err_t tcp_cli_con_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) {
     ws_cliant_con* cli_con = (ws_cliant_con*)arg;
     if (!p) {
         // cliant closed the connection
-        return tcp_cli_con_result(arg, -1);
+        tcp_cli_con_err(arg, ERR_CLSD);
+        return ERR_OK;
     }
     // this method is callback from lwIP, so cyw43_arch_lwip_begin is not required, however you
     // can use this method to cause an assertion in debug mode, if this method is called when
@@ -664,7 +685,7 @@ err_t tcp_cli_con_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t er
         cli_con->p_current = p;
     }
 
-    iol_notify(&cli_con->io_task, WS_T_YIELD_REASON_READ);
+    iol_notify(&cli_con->io_task, WS_T_YIELD_REASON_READ, ERR_OK);
 
     // pbufs get freed as we used them. No need to free them here.
 
@@ -681,20 +702,18 @@ static err_t tcp_cli_con_poll(void *arg, struct tcp_pcb *tpcb) {
     return ERR_OK;
 }
 
-static void tcp_cli_con_err(void *arg, err_t err) {
-    if (err != ERR_ABRT) {
-        DEBUG_printf("tcp_client_err_fn %d\n", err);
-        tcp_cli_con_result(arg, err);
-    }
-}
-
 
 // ================ CLIANT CONNECTION ACCEPTER ================
 
-void reset_cli_con_for_new_client(ws_cliant_con* cli_con) {
+int reset_cli_con_for_new_client(ws_cliant_con* cli_con) {
     // TODO: DELETE THIS FUNCTION! When we support multiple clients, new objects will be allocated.
     // For now, just zero out the client connection specific parts of our mega struct while
     // not touching the server stuff.
+
+    if (cli_con->task != NULL && !sub_task_reset(cli_con->task)) {
+        DEBUG_printf("Failed to reset the task.\n");
+        return ERR_INPROGRESS;
+    }
 
     cli_con->ack_callback.call = NULL;
     // cli_con->io_task handled cleanly by iol_task_run
@@ -703,17 +722,16 @@ void reset_cli_con_for_new_client(ws_cliant_con* cli_con) {
     cli_con->printed_circuit_board = NULL;
     cli_con->recved_current = 0;
     cli_con->task = NULL;
-    cli_con->active_err = 0;
+
+    return ERR_OK;
 }
 
 // goes in ---> tcp_accept()
 // A new client connection is accepted.
 static err_t tcp_server_accept(void *arg, struct tcp_pcb *client_pcb, err_t err) {
     ws_cliant_con* cli_con = (ws_cliant_con*)arg;
-    reset_cli_con_for_new_client(cli_con);
-    if (err != ERR_OK || client_pcb == NULL) {
-        DEBUG_printf("Failure in accept\n");
-        tcp_cli_con_result(arg, err);
+    if (err != ERR_OK || client_pcb == NULL || (err = reset_cli_con_for_new_client(cli_con))) {
+        DEBUG_printf("Failure in accept: %i\n", err);
         return ERR_VAL;
     }
     DEBUG_printf("Client connected\n");
@@ -728,10 +746,10 @@ static err_t tcp_server_accept(void *arg, struct tcp_pcb *client_pcb, err_t err)
     tcp_err(client_pcb, tcp_cli_con_err);
 
     // It will just run until it needs bytes and wait
-    iol_task_run(&cli_con->io_task, ws_check_reason, cli_con, cli_con->task, do_ws_header, cli_con);
+    size_t ret = iol_task_run(&cli_con->io_task, ws_check_reason, cli_con, cli_con->task, do_cli_con_task, cli_con);
 
     //return tcp_server_send_data(arg, cli_con->printed_circuit_board);
-    return ERR_OK;
+    return ret;
 }
 
 // ================ MAIN FUNCTIONS ================
@@ -774,7 +792,7 @@ void run_tcp_server_test() {
     }
 
     if (!tcp_server_open(cli_con)) {
-        tcp_cli_con_result(cli_con, -1);
+        DEBUG_printf("Server failed to open :(\n");
         return;
     }
     // TODO: deallocate ws_cliant_con later

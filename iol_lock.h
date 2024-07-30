@@ -12,10 +12,13 @@ typedef struct iol_lock_obj_t {
     sub_task* waiting_task;
     void* user_obj;
 
-    bool (*check_reason)(void* user_obj, size_t reason);
+    bool (*check_reason)(void* user_obj, size_t reason, size_t err);
 
     // What is the task waiting for?
     size_t waiting_reason;
+
+    // TODO: FIXME: active_err only stores the last error
+    size_t active_err;
 
     // Protect the task from being continued while it is already running
     // This would result in upside-down-world! Don't go to upside-down-world;
@@ -38,7 +41,7 @@ int iol_init();
  * @return true
  * @return false
  */
-int iol_notify(iol_lock_obj* lock, size_t reason);
+int iol_notify(iol_lock_obj* lock, size_t reason, size_t err);
 
 /**
  * @brief Initialize the lock object and run the task with args
@@ -48,7 +51,7 @@ int iol_notify(iol_lock_obj* lock, size_t reason);
  */
 int iol_task_run(
         iol_lock_obj* lock,
-        bool (*check_reason)(void* user_obj, size_t reason),
+        bool (*check_reason)(void* user_obj, size_t reason, size_t err),
         void* user_obj,
         sub_task* task, size_t (*task_function)(sub_task*, void*),
         void* args);

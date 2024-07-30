@@ -50,6 +50,8 @@ typedef struct sub_task_ {
  */
 size_t sub_task_run(sub_task* task, size_t (*task_function)(sub_task*, void*), void* args);
 
+void sub_task_trap();
+
 /**
  * @brief Yield to the colling procedure. Maybe we will have more data when we continue.
  * Because we are clever, we put pre_ret_code as the first arg. That way it falls
@@ -65,6 +67,21 @@ static inline void* sub_task_yield(size_t pre_ret_code, sub_task* current_task) 
 
 static inline size_t sub_task_continue(sub_task* task, void* args) {
     return sub_task_run(task, NULL, args);
+}
+
+/**
+ * @brief Checks the task's stack for a special trap that is placed when a task ends.
+ * If this trap exists, then the task is reset.
+ *
+ * @return true If the task was done and has been reset
+ * @return false If the task did not finish.
+ */
+static inline bool sub_task_reset(sub_task* task) {
+    if (*((void (**)()) task->stack_ptr) == sub_task_trap) {
+        task->stack_ptr = (void (**)()) task->stack_ptr + 1;
+        return true;
+    }
+    return false;
 }
 
 #endif

@@ -36,7 +36,7 @@ bool iol_trylock(iol_lock_obj* lock) {
     return locked;
 }
 
-void iol_continue(iol_lock_obj* lock, size_t err) {
+void iol_continue(iol_lock_obj* lock) {
     while (true) {
 
         if (!iol_trylock(lock)) {
@@ -45,6 +45,8 @@ void iol_continue(iol_lock_obj* lock, size_t err) {
             break;
         }
 
+        size_t err = lock->active_err;
+        // lock->active_err = 0; // TODO: Maybe some types of errors should auto-clear? More specifig handling.
         lock->waiting_reason = sub_task_continue(lock->waiting_task, (void*) err);
 
         iol_unlock(lock);
@@ -52,7 +54,7 @@ void iol_continue(iol_lock_obj* lock, size_t err) {
         // Interrupts and other cores can now trigger notifications again.
         // Check and handle any we might have missed while locked.
 
-        if (!lock->check_reason(lock->user_obj, lock->waiting_reason)) {
+        if (!lock->check_reason(lock->user_obj, lock->waiting_reason, lock->active_err)) {
             // Still waiting for a valid reason to resume or the task has ended.
             break;
         }
@@ -72,7 +74,11 @@ int iol_notify(iol_lock_obj* lock, size_t reason, size_t err) {
         return 1;
     }
 
-    iol_continue(lock, err);
+    if (err) {
+        lock->active_err = err;
+    }
+
+    iol_continue(lock);
 }
 
 /**
@@ -83,7 +89,7 @@ int iol_notify(iol_lock_obj* lock, size_t reason, size_t err) {
  */
 int iol_task_run(
         iol_lock_obj* lock,
-        bool (*check_reason)(void* user_obj, size_t reason),
+        bool (*check_reason)(void* user_obj, size_t reason, size_t err),
         void* user_obj,
         sub_task* task, size_t (*task_function)(sub_task*, void*),
         void* args) {
@@ -92,6 +98,7 @@ int iol_task_run(
     lock->user_obj = user_obj;
     lock->check_reason = check_reason;
     lock->waiting_reason = 0;
+    lock->active_err = 0;
     lock->locked = false;
 
     if (!iol_trylock(lock)) {
@@ -106,9 +113,9 @@ int iol_task_run(
     // Interrupts and other cores can now trigger notifications again.
     // Check and handle any we might have missed while locked.
 
-    if (lock->check_reason(lock->user_obj, lock->waiting_reason)) {
+    if (lock->check_reason(lock->user_obj, lock->waiting_reason, lock->active_err)) {
         // An interrupt must have came in just as the task was finishing.
-        iol_continue(lock, 0/*no error*/);
+        iol_continue(lock);
     }
 
     return 0;

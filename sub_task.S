@@ -46,6 +46,9 @@ sub_task_run:
 
                     // task_function returned
                     // TODO: Test this trap! (happens incase sub_task_continue is called)!
+                    // FIXME: This trap causes the stack to leak 4 bytes every time it is re-used
+                    //        with a new task. It's nice to have a trap, but maybe find a more global
+                    //        way to put it there.
                     ldr	r3, =sub_task_trap
                     push {r3}
 
@@ -106,5 +109,7 @@ sub_task_run:
     mov r7, r11
     pop {r4-r7, pc} // Restore link register into PC
 
-    sub_task_trap:
+.global sub_task_trap
+.thumb_func
+sub_task_trap:
     pop {pc} // last time I did this, it caused a hard fault, so maybe it will here.
