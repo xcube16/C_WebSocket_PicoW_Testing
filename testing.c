@@ -132,11 +132,12 @@ void set_ack_callback(ws_cliant_con* cli_con, err_t (*call)(void*, u16_t), void*
  * @param size size of buf (max size that can be read)
  * @return The number of bytes actually read or an error code
  */
-size_t ws_read(ws_cliant_con* cli_con, char* buf, size_t size) {
+int ws_read(ws_cliant_con* cli_con, char* buf, size_t size) {
     if (!cli_con->p_current) {
         return 0; // We are still waiting for more data
     }
 
+    // TODO: pbuf_copy_partial returns 0 on 'failure'. Check that
     // fill the buffer until it reaches size or we run out of pbufs in the chain
     u16_t bytes_read = pbuf_copy_partial(
         cli_con->p_current,
@@ -211,11 +212,11 @@ int ws_consume(ws_cliant_con* cli_con, size_t size) {
  * @param size size of buf (max size that can be read)
  * @return The number of bytes actually read or an error code
  */
-size_t ws_t_read(ws_cliant_con* cli_con, char* buf, size_t size) {
-    size_t ret = 0;
+int ws_t_read(ws_cliant_con* cli_con, char* buf, size_t size) {
+    int ret = 0;
 
     while (size > ret) {
-        size_t r = ws_read(cli_con, buf + ret, size - ret);
+        int r = ws_read(cli_con, buf + ret, size - ret);
         if (r < 0) {
             return r;
         }
@@ -224,7 +225,7 @@ size_t ws_t_read(ws_cliant_con* cli_con, char* buf, size_t size) {
 
         if (size > ret) {
 
-            if (r = (size_t) sub_task_yield(WS_T_YIELD_REASON_READ, cli_con->task)) {
+            if (r = (int) sub_task_yield(WS_T_YIELD_REASON_READ, cli_con->task)) {
                 return r;
             }
         }

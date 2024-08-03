@@ -453,7 +453,7 @@ err_t websocket_read(ws_framinator* ws_con, char* buf, size_t size) {
         // Use up existing payload first
         if (ws_con->read_length > 0) {
             size_t canReadLen = MIN(ws_con->read_length, size);
-            if (ret = ws_t_read(ws_con->con, &buf, canReadLen)) {
+            if (ret = ws_t_read(ws_con->con, buf, canReadLen) < 0) {
                 return ret;
             }
             websocket_apply_mask(ws_con, buf, canReadLen);
@@ -470,20 +470,20 @@ err_t websocket_read(ws_framinator* ws_con, char* buf, size_t size) {
         // Read a new frame/payload
         uint16_t header;
 
-        if (ret = ws_t_read(ws_con->con, &header, sizeof(header))) {
+        if (ret = ws_t_read(ws_con->con, (char*) &header, sizeof(header)) < 0) {
             return ret;
         }
 
         uint64_t length = WS_HEADER_LEN7(header);
 
         if (length == WS_HEADER_PAYLOAD_LEN_USE_16BIT) {
-            if (ret = ws_t_read(ws_con->con, (char*) &length, sizeof(uint16_t))) {
+            if (ret = ws_t_read(ws_con->con, (char*) &length, sizeof(uint16_t)) < 0) {
                 return ret;
             }
             length = lwip_ntohs((uint16_t) (length >> 24));
 
         } else if (length == WS_HEADER_PAYLOAD_LEN_USE_16BIT) {
-            if (ret = ws_t_read(ws_con->con, (char*) &length, sizeof(uint64_t))) {
+            if (ret = ws_t_read(ws_con->con, (char*) &length, sizeof(uint64_t)) < 0) {
                 return ret;
             }
             length = (uint64_t)(lwip_ntohl((uint32_t) (length      )) << 32) |
@@ -495,7 +495,7 @@ err_t websocket_read(ws_framinator* ws_con, char* buf, size_t size) {
         }
 
         if (header & WS_HEADER_MASK) {
-            if (ret = ws_t_read(ws_con->con, (char*) &ws_con->read_mask, sizeof(ws_con->read_mask))) {
+            if (ret = ws_t_read(ws_con->con, (char*) &ws_con->read_mask, sizeof(ws_con->read_mask)) < 0) {
                 return ret;
             }
         } else {
