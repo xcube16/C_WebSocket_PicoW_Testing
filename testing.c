@@ -557,7 +557,7 @@ size_t do_ws_header(ws_cliant_con* cli_con) {
 
     while (true) {
         char c;
-        if ((ret = ws_t_read(cli_con, &c, 1)) < 0) {
+        if ((ret = websocket_read(&framinator, &c, 1)) < 0) {
             return ret;
         }
         printf("%c", c);

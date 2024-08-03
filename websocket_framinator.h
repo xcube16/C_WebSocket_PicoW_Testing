@@ -20,14 +20,17 @@
 #define WS_MRK_GET_LEN(packed)         ((uint32_t)packed & 0x00FFFFFF)
 
 #define WS_HEADER_FIN  0x8000
-#define WS_HEADER_OPCODE(code) ((uint16_t)code << 8);
+#define WS_HEADER_GET_OPCODE(code) ((uint16_t)code & 0x000F)
+#define WS_HEADER_OPCODE(code) ((uint16_t)code << 8) // TODO: switch endian here and where it is used.
 #define WS_HEADER_OPCODE_CONTINUATION 0x0
 #define WS_HEADER_OPCODE_TEXT         0x1
 #define WS_HEADER_OPCODE_DATA         0x2
 #define WS_HEADER_OPCODE_CLOSE        0x8
 #define WS_HEADER_OPCODE_PING         0x9
 #define WS_HEADER_OPCODE_PONG         0xA
-#define WS_HEADER_MASK 0x0010
+#define WS_HEADER_MASK 0x0080
+#define WS_HEADER_LEN7(header) ((header >> 8) & 0x007F);
+
 #define WS_HEADER_PAYLOAD_LEN_USE_16BIT 126
 #define WS_HEADER_PAYLOAD_LEN_USE_64BIT 127
 
@@ -81,6 +84,18 @@ typedef struct ws_framinator_ {
     // a small amout of data from getting stuck if the application pauses
     // for a bit. Although, this is not so very important if the application
     // sends us some hints.
+
+    uint64_t read_length;
+
+    // The mask is automatically rotated after each read to keep it lined it up
+    // a with 4 byte word boundry in the payload.
+    // Example: Our payload has 10 bytes, but the first read only eats one of them.
+    //          read_mask would be rotated by one byte.
+    // payload: ABCD ABCD AB
+    // mask:    1234
+    // payload: BCD ABCD AB
+    // mask:    234 1
+    uint32_t read_mask;
 
 } ws_framinator;
 
@@ -165,6 +180,9 @@ err_t websocket_initialize_framinator(ws_framinator* framinator, ws_cliant_con* 
     framinator->head = framinator->current_marker + sizeof(ws_buf_marker) + WS_MAX_NO_MASK_HEADER_LEN;
 
     framinator->current_payload_len = 0;
+
+    framinator->read_length = 0;
+    framinator->read_mask = 0;
 
     return ERR_OK;
 }
@@ -390,6 +408,100 @@ err_t websocket_flush(ws_framinator* ws_con) {
     // TODO: Low priority. Maybe we don't need to initialize it to zero as we will enter the values
     // when ready to advance ws_con->head/send the packet anyway.
     ((ws_buf_marker*) (ws_con->buf + ws_con->current_marker))->flags_and_len = 0x00000000;
+
+    return ERR_OK;
+}
+
+void websocket_apply_mask(ws_framinator* ws_con, char* buf, size_t size) {
+
+    size_t mod = MIN(4 - ((size_t) buf % 4), size);
+    if (mod) {
+        // buf is not lined up on a 4 byte boundry. Handle the un-aligned bytes explicitly.
+        for (int i = 0; i < mod; i++) {
+            buf[i] = buf[i] ^ (ws_con->read_mask >> (i * 8));
+        }
+
+        // Rotate the read mask so that it lines up
+        ws_con->read_mask = ws_con->read_mask << (32 - mod * 8) | ws_con->read_mask >> (mod * 8);
+        size -= mod;
+        buf  += mod;
+        // Now we know buf is aligned, or we hit size and the rest of this function should short out.
+    }
+
+    // Note: Our mask is backwards from not converting it to little-endian,
+    // but so is our buf when read as uint32_t's, so we are ok for now.
+    for (int i = 0; i < size / 4; i++) {
+        ((uint32_t*) buf)[i] = ((uint32_t*) buf)[i] ^ ws_con->read_mask;
+    }
+
+    mod = size % 4;
+    if (mod) {
+        for (int i = 1; i <= mod; i++) {
+            buf[size - i] = buf[size - i] ^ (ws_con->read_mask >> ((mod - i) * 8));
+        }
+
+        // Rotate the read mask so that it lines up
+        ws_con->read_mask = ws_con->read_mask << (32 - mod * 8) | ws_con->read_mask >> (mod * 8);
+    }
+
+}
+
+err_t websocket_read(ws_framinator* ws_con, char* buf, size_t size) {
+    err_t ret;
+
+    while (size > 0) {
+        // Use up existing payload first
+        if (ws_con->read_length > 0) {
+            size_t canReadLen = MIN(ws_con->read_length, size);
+            if (ret = ws_t_read(ws_con->con, &buf, canReadLen)) {
+                return ret;
+            }
+            websocket_apply_mask(ws_con, buf, canReadLen);
+
+            buf                 += canReadLen;
+            size                -= canReadLen;
+            ws_con->read_length -= canReadLen;
+
+            if (size == 0) {
+                return ERR_OK; // The last payload had enough left to complete the read
+            }
+        }
+
+        // Read a new frame/payload
+        uint16_t header;
+
+        if (ret = ws_t_read(ws_con->con, &header, sizeof(header))) {
+            return ret;
+        }
+
+        uint64_t length = WS_HEADER_LEN7(header);
+
+        if (length == WS_HEADER_PAYLOAD_LEN_USE_16BIT) {
+            if (ret = ws_t_read(ws_con->con, (char*) &length, sizeof(uint16_t))) {
+                return ret;
+            }
+            length = lwip_ntohs((uint16_t) (length >> 24));
+
+        } else if (length == WS_HEADER_PAYLOAD_LEN_USE_16BIT) {
+            if (ret = ws_t_read(ws_con->con, (char*) &length, sizeof(uint64_t))) {
+                return ret;
+            }
+            length = (uint64_t)(lwip_ntohl((uint32_t) (length      )) << 32) |
+                    (uint64_t)(lwip_ntohl((uint32_t) (length >> 32))      );
+        }
+        // TODO: Handle more packet types.
+        if (WS_HEADER_GET_OPCODE(header) == WS_HEADER_OPCODE_DATA || WS_HEADER_GET_OPCODE(header) == WS_HEADER_OPCODE_TEXT) {
+            ws_con->read_length = length;
+        }
+
+        if (header & WS_HEADER_MASK) {
+            if (ret = ws_t_read(ws_con->con, (char*) &ws_con->read_mask, sizeof(ws_con->read_mask))) {
+                return ret;
+            }
+        } else {
+            ws_con->read_mask = 0; // basically a no-op when XOR happens.
+        }
+    }
 
     return ERR_OK;
 }
