@@ -19,7 +19,8 @@
 #define WS_MRK_LEN(val)                ((uint32_t)val)
 #define WS_MRK_GET_LEN(packed)         ((uint32_t)packed & 0x00FFFFFF)
 
-#define WS_HEADER_FIN  0x8000
+#define WS_HEADER_FIN_old  0x8000 // TODO: switch to little endian
+#define WS_HEADER_FIN      0x0080
 #define WS_HEADER_GET_OPCODE(code) ((uint16_t)code & 0x000F)
 #define WS_HEADER_OPCODE(code) ((uint16_t)code << 8) // TODO: switch endian here and where it is used.
 #define WS_HEADER_OPCODE_CONTINUATION 0x0
@@ -28,7 +29,7 @@
 #define WS_HEADER_OPCODE_CLOSE        0x8
 #define WS_HEADER_OPCODE_PING         0x9
 #define WS_HEADER_OPCODE_PONG         0xA
-#define WS_HEADER_MASK 0x0080
+#define WS_HEADER_MASK 0x8000
 #define WS_HEADER_LEN7(header) ((header >> 8) & 0x007F);
 
 #define WS_HEADER_PAYLOAD_LEN_USE_16BIT 126
@@ -96,6 +97,9 @@ typedef struct ws_framinator_ {
     // payload: BCD ABCD AB
     // mask:    234 1
     uint32_t read_mask;
+    // When the FIN bit is not set, we need to keep track of the last opcode
+    // as the next frames will just have the CONTINUATION opcode.
+    uint8_t  read_lastOp;
 
 } ws_framinator;
 
@@ -183,6 +187,7 @@ err_t websocket_initialize_framinator(ws_framinator* framinator, ws_cliant_con* 
 
     framinator->read_length = 0;
     framinator->read_mask = 0;
+    framinator->read_lastOp = 0;
 
     return ERR_OK;
 }
@@ -192,7 +197,7 @@ void websocket_complete_and_send_frame(ws_framinator* ws_con) {
     // TODO: Compute number of scratch/no-ack bytes fromws_con->current_payload_len
     // and by assuming ws_con->head is the true end.
 
-    uint16_t header = WS_HEADER_FIN | WS_HEADER_OPCODE(WS_HEADER_OPCODE_DATA);
+    uint16_t header = WS_HEADER_FIN_old | WS_HEADER_OPCODE(WS_HEADER_OPCODE_DATA);
     if (ws_con->current_payload_len >= WS_HEADER_PAYLOAD_LEN_USE_16BIT) {
         header |= WS_HEADER_PAYLOAD_LEN_USE_16BIT;
         ws_frame_large* frame = ((ws_frame_large*) (ws_con->buf + ws_con->current_marker));
@@ -453,7 +458,7 @@ err_t websocket_read(ws_framinator* ws_con, char* buf, size_t size) {
         // Use up existing payload first
         if (ws_con->read_length > 0) {
             size_t canReadLen = MIN(ws_con->read_length, size);
-            if (ret = ws_t_read(ws_con->con, buf, canReadLen) < 0) {
+            if ((ret = ws_t_read(ws_con->con, buf, canReadLen)) < 0) {
                 return ret;
             }
             websocket_apply_mask(ws_con, buf, canReadLen);
@@ -470,36 +475,69 @@ err_t websocket_read(ws_framinator* ws_con, char* buf, size_t size) {
         // Read a new frame/payload
         uint16_t header;
 
-        if (ret = ws_t_read(ws_con->con, (char*) &header, sizeof(header)) < 0) {
+        if ((ret = ws_t_read(ws_con->con, (char*) &header, sizeof(header))) < 0) {
             return ret;
         }
 
         uint64_t length = WS_HEADER_LEN7(header);
 
         if (length == WS_HEADER_PAYLOAD_LEN_USE_16BIT) {
-            if (ret = ws_t_read(ws_con->con, (char*) &length, sizeof(uint16_t)) < 0) {
+            if ((ret = ws_t_read(ws_con->con, (char*) &length, sizeof(uint16_t))) < 0) {
                 return ret;
             }
-            length = lwip_ntohs((uint16_t) (length >> 24));
+            length = lwip_ntohs((uint16_t) length);
 
-        } else if (length == WS_HEADER_PAYLOAD_LEN_USE_16BIT) {
-            if (ret = ws_t_read(ws_con->con, (char*) &length, sizeof(uint64_t)) < 0) {
+        } else if (length == WS_HEADER_PAYLOAD_LEN_USE_64BIT) {
+            if ((ret = ws_t_read(ws_con->con, (char*) &length, sizeof(uint64_t))) < 0) {
                 return ret;
             }
-            length = (uint64_t)(lwip_ntohl((uint32_t) (length      )) << 32) |
-                    (uint64_t)(lwip_ntohl((uint32_t) (length >> 32))      );
+            length = ((uint64_t) lwip_ntohl((uint32_t) (length      )) << 32) |
+                     ((uint64_t) lwip_ntohl((uint32_t) (length >> 32))      );
         }
-        // TODO: Handle more packet types.
-        if (WS_HEADER_GET_OPCODE(header) == WS_HEADER_OPCODE_DATA || WS_HEADER_GET_OPCODE(header) == WS_HEADER_OPCODE_TEXT) {
-            ws_con->read_length = length;
-        }
+        ws_con->read_length = length; // all frame types have a length field.
 
         if (header & WS_HEADER_MASK) {
-            if (ret = ws_t_read(ws_con->con, (char*) &ws_con->read_mask, sizeof(ws_con->read_mask)) < 0) {
+            if ((ret = ws_t_read(ws_con->con, (char*) &ws_con->read_mask, sizeof(ws_con->read_mask))) < 0) {
                 return ret;
             }
         } else {
             ws_con->read_mask = 0; // basically a no-op when XOR happens.
+        }
+
+        // Handle continuation frames of the previous opcode.
+        uint8_t opcode = WS_HEADER_GET_OPCODE(header);
+        if (opcode == WS_HEADER_OPCODE_CONTINUATION && ws_con->read_lastOp != WS_HEADER_OPCODE_CONTINUATION) {
+            // We are a continuation and the lastOp is valid
+            opcode = ws_con->read_lastOp;
+        }
+        // If we are a continuation and the lastOp is invalid, we will process it
+        // as a sperious continuation frame and "Unhandled websocket frame: 0" should be printed below
+
+        if (header & WS_HEADER_FIN) {
+            // This is the last frame with our current opcode (be it a one-shot or multiple frames)
+            // Set the lastOp to something invalid (CONTINUATION/0 works)
+            ws_con->read_lastOp = WS_HEADER_OPCODE_CONTINUATION;
+        } else if (opcode != WS_HEADER_OPCODE_CONTINUATION) {
+            // We are not finished and we are starting a new opcode.
+            //                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ <= or we are a valid continuation
+            //                                                         lastOp = opcode; is basically a no-op
+            //                                                         so we are ok.
+            // Continuation frames will need it!
+            ws_con->read_lastOp = opcode;
+        }
+
+        // TODO: Handle more packet types. (pings and stuff)
+        if (opcode != WS_HEADER_OPCODE_DATA && opcode != WS_HEADER_OPCODE_TEXT) {
+
+            DEBUG_printf("Unhandled websocket frame: %hhd\n", opcode);
+            // TODO: add ws_t_skip function and remove this lag maker!
+            char sloooooow;
+            while (ws_con->read_length) {
+                if ((ret = ws_t_read(ws_con->con, &sloooooow, 1)) < 0) {
+                    return ret;
+                }
+                ws_con->read_length--;
+            }
         }
     }
 

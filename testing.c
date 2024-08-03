@@ -557,11 +557,15 @@ size_t do_ws_header(ws_cliant_con* cli_con) {
     websocket_flush(&framinator);
 
     while (true) {
-        char c;
-        if ((ret = websocket_read(&framinator, &c, 1)) < 0) {
+        char c[50];
+        c[0] = '#';
+        c[1] = '#';
+        c[2] = '#';
+
+        if ((ret = websocket_read(&framinator, c + 3, 46))) {
             return ret;
         }
-        printf("%c", c);
+        printf("%s", c);
 
         // o god. I wanted to write messages in a loop, but we need a threaded sleep!
         //sleep_ms(1000);

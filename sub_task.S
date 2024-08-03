@@ -102,12 +102,12 @@ sub_task_run:
 
     // Restore the high-registers off the current (main) stack
 
-    pop {r4-r7}     /* Load the low registers.  */
-    mov r4, r8      /* Load the high registers. */
-    mov r5, r9
-    mov r6, r10
-    mov r7, r11
-    pop {r4-r7, pc} // Restore link register into PC
+    pop {r4-r7}     /*  Pop the high registers.  */
+    mov r8, r4      /* Load the high registers. */
+    mov r9, r5
+    mov r10, r6
+    mov r11, r7
+    pop {r4-r7, pc} // Pop/Load low registers and Pop/Load link register into PC
 
 .global sub_task_trap
 .thumb_func
