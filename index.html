@@ -1,0 +1,116 @@
+
+<!doctype html>
+<html>
+    <head>
+        <script>
+            var socket;
+            var conAttempts = 0;
+
+            function setStatus(status) {
+                document.getElementById("status").innerHTML = status;
+            }
+
+            function connect() {
+                conAttempts++;
+                setStatus("Connecting...");
+                socket = new WebSocket("ws://192.168.12.147:8080", 'chat')
+
+                socket.onopen = function (event) {
+                    console.log('open');
+                    setStatus("Connected");
+                    setTimeout(function() {
+                        conAttempts = 0; // reset the attempts after 60s
+                    }, 60000);
+                }
+
+                socket.onclose = function (event) {
+                    console.log(event)
+                    setStatus("Disconnected");
+                };
+
+                socket.onerror = function(err) {
+                    console.error('Socket encountered error: ', err.message, 'Closing socket');
+                    setStatus("Errored/Disconnected");
+                    socket.close();
+                };
+
+                socket.onmessage = function(message) {
+                    
+
+                    //const packet = JSON.parse(message.data);
+
+                    const sensor_value = 4096 - Number(message.data);
+                    
+                    let color = Math.min(Math.max(sensor_value / 16, 0), 255);
+
+                    document.getElementById("sensor_color").style["background-color"] = "rgb(" + color + "," + color + ",40)"
+                    
+                    /*if (event.data instanceof Blob) {
+                        reader = new FileReader();
+
+                        reader.onload = () => {
+                            console.log("Result: " + reader.result);
+                        };
+
+                        reader.readAsText(event.data);
+                    } else {
+                        console.log("Result: " + event.data);
+                    }*/
+                };
+            }
+
+            function tryReconnect() {
+                if (conAttempts < 4) {
+                    setTimeout(function() {
+                        connect();
+                    }, 4000);
+                } else {
+                    setStatus("Failed/Disconnected");
+                }
+            }
+
+            function turnon() {
+                if (socket.readyState == 1) {
+                    socket.send("1");
+                }
+            }
+            
+            function turnoff() {
+                if (socket.readyState == 1) {
+                    socket.send("0");
+                }
+            }
+
+            function turntoggle() {
+                if (socket.readyState == 1) {
+                    socket.send("2");
+                }
+            }
+        </script>
+    </head>
+    <body>
+        Test page.<br/>
+        Status: <div id="status"></div><br/><br/>
+
+        Sensor Feedback:
+        <div id="sensor_color" style="width:100%; height:50px; background-color:#333333"></div>
+        <br/><br/>
+        <button onclick="turnon()">On</button>
+        <button onclick="turnoff()">Off</button>
+        <button onclick="turntoggle()">Toggle</button>
+
+        <script>
+            connect();
+            
+            function tickyTickTick() {
+                if (socket.readyState == 1) {
+                    socket.send("b");
+                }
+                setTimeout(tickyTickTick, 50);
+            }
+            tickyTickTick();
+            
+        </script>
+    </body>
+</html>
+

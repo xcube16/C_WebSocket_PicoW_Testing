@@ -48,7 +48,7 @@
 #define LWIP_UDP                    1
 #define LWIP_DNS                    0
 #define LWIP_TCP_KEEPALIVE          1
-#define LWIP_NETIF_TX_SINGLE_PBUF   1
+#define LWIP_NETIF_TX_SINGLE_PBUF   0 // no... no don't do that. We had a crash when doing large tcp_write
 #define DHCP_DOES_ARP_CHECK         0
 #define LWIP_DHCP_DOES_ACD_CHECK    0
 

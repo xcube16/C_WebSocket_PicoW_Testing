@@ -1,5 +1,7 @@
 
 #include "pico/stdlib.h"
+#include "hardware/gpio.h"
+#include "hardware/adc.h"
 
 #include "lwipopts.h"
 #include "pico/cyw43_arch.h"
@@ -80,8 +82,9 @@ const char ws_page_responce2[] =
     "\r\n"
     "\r\n";
 
-const char ws_page_body[] =
-    "<!doctype html><html><body>Test page. TODO: add a script to connet via websocket and display information</body></html>";
+//const char ws_page_body[] =
+//    "<!doctype html><html><body>Test page. TODO: add a script to connet via websocket and display information</body></html>";
+#include "temp_header_for_index_html.h"
 
 // ================ CLIANT CONNECTION ================
 
@@ -502,11 +505,11 @@ size_t do_ws_header(ws_cliant_con* cli_con) {
         ws_t_write(cli_con, ws_page_responce1, sizeof(ws_page_responce1) - 1, TCP_WRITE_FLAG_MORE);
 
         char contentLenBuf[12];
-        sprintf(contentLenBuf, "%i", sizeof(ws_page_body) - 1);
+        sprintf(contentLenBuf, "%i", sizeof(index_html));
 
         ws_t_write(cli_con, contentLenBuf, strlen(contentLenBuf), TCP_WRITE_FLAG_MORE);
         ws_t_write(cli_con, ws_page_responce2, sizeof(ws_page_responce2) - 1, TCP_WRITE_FLAG_MORE);
-        ws_t_write(cli_con, ws_page_body, sizeof(ws_page_body) - 1, 0);
+        ws_t_write(cli_con, index_html, sizeof(index_html), 0);
 
         // Flush the output? I am not really sure if this is needed or even wanted.
         tcp_output(cli_con->printed_circuit_board);
@@ -550,22 +553,33 @@ size_t do_ws_header(ws_cliant_con* cli_con) {
     ws_framinator framinator;
     websocket_initialize_framinator(&framinator, cli_con);
 
-    char cool_message[] = "The PI Pico now has WebSockets!\n";
-    websocket_write(&framinator, cool_message, sizeof(cool_message) - 1); // subtract the null char
+    //char cool_message[] = "The PI Pico now has WebSockets!\n";
+    //websocket_write(&framinator, cool_message, sizeof(cool_message) - 1); // subtract the null char
 
-    websocket_write(&framinator, cool_message, sizeof(cool_message) - 1); // subtract the null char
-    websocket_flush(&framinator);
+    //websocket_write(&framinator, cool_message, sizeof(cool_message) - 1); // subtract the null char
+    //websocket_flush(&framinator);
 
     while (true) {
-        char c[50];
-        c[0] = '#';
-        c[1] = '#';
-        c[2] = '#';
+        char command; // 0 = off, 1 = on, 2 = toggle
 
-        if ((ret = websocket_read(&framinator, c + 3, 46))) {
+        if ((ret = websocket_read(&framinator, &command, 1))) {
             return ret;
         }
-        printf("%s", c);
+
+        if (command == '1') {
+            gpio_put(11, 1); // on
+        } else if (command == '0') {
+            gpio_put(11, 0); // off
+        } else if (command == '2') {
+            gpio_put(11, !gpio_get(11)); // toggle
+        } else if (command == 'b') {
+            char number_str[10];
+            sprintf(number_str, "%d", adc_read());
+            websocket_write(&framinator, number_str, strlen(number_str));
+            websocket_flush(&framinator);
+        }
+
+        printf("%c", command);
 
         // o god. I wanted to write messages in a loop, but we need a threaded sleep!
         //sleep_ms(1000);
@@ -615,7 +629,7 @@ size_t do_cli_con_task(sub_task* task, void* args) {
 static err_t tcp_cli_con_sent(void* arg, struct tcp_pcb* tpcb, u16_t len) {
     ws_cliant_con* cli_con = (ws_cliant_con*)arg;
 
-    printf("tcp_cli_con_sent %u\n", len);
+    //printf("tcp_cli_con_sent %u\n", len);
 
     // Do we need the len arg? Maybe not!
     // Here is what I found:
@@ -662,6 +676,15 @@ static void tcp_cli_con_err(void *arg, err_t err) {
         // Now let the task cleanup the connection objects when it is ready.
         // If we cleaned it up here while the task is in the middle of using them,
         // it would be bad (use after free, or worse).
+    } else {
+        DEBUG_printf("tcp_client_err_fn %d\n", err);
+
+        ws_cliant_con* cli_con = (ws_cliant_con*)arg;
+
+        // TODO: FIXME: See reason why this is bad in ACK handler.
+        iol_notify(&cli_con->io_task, WS_T_YIELD_REASON_READ, err);
+        iol_notify(&cli_con->io_task, WS_T_YIELD_REASON_WAIT_FOR_ACK, err);
+        iol_notify(&cli_con->io_task, WS_T_YIELD_REASON_FLUSH, err);
     }
 }
 
@@ -681,7 +704,7 @@ err_t tcp_cli_con_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t er
         return ERR_OK;
     }
 
-    DEBUG_printf("tcp_cli_con_recv %d err %d\n", p->tot_len, err);
+    //DEBUG_printf("tcp_cli_con_recv %d err %d\n", p->tot_len, err);
 
     // We might have some un-processed pbufs if the subtask yielded for some other reason, stack the new ones on top.
     if (cli_con->p_current) {
@@ -815,6 +838,15 @@ int main() {
     //gpio_init(LED_PIN);
     //gpio_set_dir(LED_PIN, GPIO_OUT);
     stdio_init_all();
+
+    // init digital output on GP11
+    gpio_init(11);
+    gpio_set_dir(11, true); // output
+
+    // init analog input on ADC0
+    adc_init();
+    adc_gpio_init(26);
+    adc_select_input(0);
 
     SUB_TASK_GLOBAL_INIT(task_ws_header)
 

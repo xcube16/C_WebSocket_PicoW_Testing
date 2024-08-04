@@ -15,6 +15,8 @@ project(testing C CXX ASM)
 # Initialize the SDK
 pico_sdk_init()
 
+add_definitions(-DLWIP_DEBUG=9)
+
 add_executable(testing
     testing.c
     bufferless_str.c
@@ -35,6 +37,7 @@ pico_enable_stdio_usb(testing 0)
 # pull in common dependencies
 target_link_libraries(testing
     pico_stdlib
+    hardware_adc
     pico_cyw43_arch_lwip_threadsafe_background
     pico_mbedtls
 )

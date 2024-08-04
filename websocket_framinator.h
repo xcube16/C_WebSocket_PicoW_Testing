@@ -197,7 +197,7 @@ void websocket_complete_and_send_frame(ws_framinator* ws_con) {
     // TODO: Compute number of scratch/no-ack bytes fromws_con->current_payload_len
     // and by assuming ws_con->head is the true end.
 
-    uint16_t header = WS_HEADER_FIN_old | WS_HEADER_OPCODE(WS_HEADER_OPCODE_DATA);
+    uint16_t header = WS_HEADER_FIN_old | WS_HEADER_OPCODE(WS_HEADER_OPCODE_TEXT);
     if (ws_con->current_payload_len >= WS_HEADER_PAYLOAD_LEN_USE_16BIT) {
         header |= WS_HEADER_PAYLOAD_LEN_USE_16BIT;
         ws_frame_large* frame = ((ws_frame_large*) (ws_con->buf + ws_con->current_marker));

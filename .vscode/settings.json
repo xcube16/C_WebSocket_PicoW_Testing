@@ -48,6 +48,7 @@
         "concepts": "c",
         "exception": "c",
         "type_traits": "c",
-        "*.tcc": "c"
+        "*.tcc": "c",
+        "gpio.h": "c"
     }
 }
