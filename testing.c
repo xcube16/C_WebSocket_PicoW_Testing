@@ -522,10 +522,8 @@ size_t do_ws_header(ws_cliant_con* cli_con) {
         return IOL_YIELD_REASON_END;
     }
 
-    // TODO: tcp_write errors instead of blocking when it's queue is full.
-    //       WE HAVE A FIX FOR THIS!, use write ws_t_write!!!
     // Write the first part of the responce
-    tcp_write(cli_con->printed_circuit_board, ws_responce1, sizeof(ws_responce1) - 1, TCP_WRITE_FLAG_MORE);
+    ws_t_write(cli_con->printed_circuit_board, ws_responce1, sizeof(ws_responce1) - 1, TCP_WRITE_FLAG_MORE);
 
     // Write the Accept key
     char hashBuf[20];
@@ -533,14 +531,11 @@ size_t do_ws_header(ws_cliant_con* cli_con) {
     memcpy(wsKey + WS_KEY_LEN, ws_uuid, sizeof(ws_uuid));
     mbedtls_sha1_ret(wsKey, WS_KEY_LEN + (sizeof(ws_uuid) - 1), hashBuf);
     encode_base64(baseBuf, hashBuf, 20);
-    // TODO: tcp_write errors instead of blocking when it's queue is full.
-    // Make it threaded. Check to see if tcp_sndbuf(li_con->printed_circuit_board);
-    // is large enough.
-    //       WE HAVE A FIX FOR THIS!, use write ws_t_write!!!
-    tcp_write(cli_con->printed_circuit_board, baseBuf, sizeof(baseBuf), TCP_WRITE_FLAG_MORE);
+
+    ws_t_write(cli_con->printed_circuit_board, baseBuf, sizeof(baseBuf), TCP_WRITE_FLAG_MORE);
 
     // Write the first last of the responce
-    tcp_write(cli_con->printed_circuit_board, ws_responce2, sizeof(ws_responce2) - 1, 0);
+    ws_t_write(cli_con->printed_circuit_board, ws_responce2, sizeof(ws_responce2) - 1, 0);
 
     // Flush the output? I am not really sure if this is needed or even wanted.
     tcp_output(cli_con->printed_circuit_board);

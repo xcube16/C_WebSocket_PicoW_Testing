@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD 17)
 #add_compile_options(-save-temps=obj)
 
 # Pull in SDK (must be before project)
+# tasted with version 1.5.1 6a7db34ff63345a7badec79ebea3aaef1712f374
 include(pico_sdk_import.cmake)
 
 project(testing C CXX ASM)
