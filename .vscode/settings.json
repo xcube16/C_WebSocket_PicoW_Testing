@@ -49,6 +49,7 @@
         "exception": "c",
         "type_traits": "c",
         "*.tcc": "c",
-        "gpio.h": "c"
+        "gpio.h": "c",
+        "temp_header_for_index_html.h": "c"
     }
 }

@@ -84,7 +84,7 @@ const char ws_page_responce2[] =
 
 //const char ws_page_body[] =
 //    "<!doctype html><html><body>Test page. TODO: add a script to connet via websocket and display information</body></html>";
-#include "temp_header_for_index_html.h"
+#include "index_html.h"
 
 // ================ CLIANT CONNECTION ================
 

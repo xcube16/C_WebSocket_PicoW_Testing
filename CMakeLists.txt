@@ -16,7 +16,16 @@ project(testing C CXX ASM)
 # Initialize the SDK
 pico_sdk_init()
 
-add_definitions(-DLWIP_DEBUG=9)
+# TODO: set in lwipopts.h
+#add_definitions(-DLWIP_DEBUG=9)
+
+add_custom_command(
+    OUTPUT index_html.h
+    COMMAND cp ${CMAKE_CURRENT_SOURCE_DIR}/index.html ${CMAKE_CURRENT_BINARY_DIR} && xxd -i index.html index_html.h
+    DEPENDS index.html
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
 add_executable(testing
     testing.c
@@ -24,6 +33,7 @@ add_executable(testing
     #lwipopts.h
     sub_task.S
     iol_lock.c
+    index_html.h
 )
 
 pico_set_program_name(testing "PICO_TESTING")
