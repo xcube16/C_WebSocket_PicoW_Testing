@@ -588,14 +588,10 @@ size_t do_ws_header(ws_cliant_con* cli_con) {
     return IOL_YIELD_REASON_END; // TODO: Do more stuff with this task? Will a new task be started?
 }
 
-err_t ws_cli_con_close(ws_cliant_con* cli_con, err_t status) {
-
-    if (status == 0) {
-        DEBUG_printf("Connection closed\n");
-    } else {
-        DEBUG_printf("Connection closed with error: %d\n", status);
-    }
-
+/**
+ * @brief Closes the PCB if it is not already closed
+ */
+err_t ws_cli_con_close_pcb(ws_cliant_con* cli_con) {
     err_t err = ERR_OK;
     if (cli_con->printed_circuit_board != NULL) {
         // TODO: make it so that the task handles this.
@@ -613,8 +609,18 @@ err_t ws_cli_con_close(ws_cliant_con* cli_con, err_t status) {
         }
         cli_con->printed_circuit_board = NULL;
     }
-
     return err;
+}
+
+err_t ws_cli_con_close(ws_cliant_con* cli_con, err_t status) {
+
+    if (status == 0) {
+        DEBUG_printf("Connection closed\n");
+    } else {
+        DEBUG_printf("Connection closed with error: %d\n", status);
+    }
+
+    return ws_cli_con_close_pcb(cli_con);
 }
 
 size_t do_cli_con_task(sub_task* task, void* args) {
@@ -664,34 +670,24 @@ static err_t tcp_cli_con_sent(void* arg, struct tcp_pcb* tpcb, u16_t len) {
 }
 
 static void tcp_cli_con_err(void *arg, err_t err) {
-    if (err != ERR_ABRT) {
-        DEBUG_printf("tcp_client_err_fn %d\n", err);
-        ws_cliant_con* cli_con = (ws_cliant_con*)arg;
+    DEBUG_printf("tcp_client_err_fn %d\n", err);
 
-        // TODO: FIXME: See reason why this is bad in ACK handler.
-        iol_notify(&cli_con->io_task, WS_T_YIELD_REASON_READ, err);
-        iol_notify(&cli_con->io_task, WS_T_YIELD_REASON_WAIT_FOR_ACK, err);
-        iol_notify(&cli_con->io_task, WS_T_YIELD_REASON_FLUSH, err);
+    ws_cliant_con* cli_con = (ws_cliant_con*)arg;
 
-        // Now let the task cleanup the connection objects when it is ready.
-        // If we cleaned it up here while the task is in the middle of using them,
-        // it would be bad (use after free, or worse).
-    } else {
-        DEBUG_printf("tcp_client_err_fn %d\n", err);
+    // The PCB is already freed according to the tcp_err() spec.
+    cli_con->printed_circuit_board = NULL;
 
-        ws_cliant_con* cli_con = (ws_cliant_con*)arg;
-
-        // TODO: FIXME: See reason why this is bad in ACK handler.
-        iol_notify(&cli_con->io_task, WS_T_YIELD_REASON_READ, err);
-        iol_notify(&cli_con->io_task, WS_T_YIELD_REASON_WAIT_FOR_ACK, err);
-        iol_notify(&cli_con->io_task, WS_T_YIELD_REASON_FLUSH, err);
-    }
+    // TODO: FIXME: See reason why this is bad in ACK handler.
+    iol_notify(&cli_con->io_task, WS_T_YIELD_REASON_READ, err);
+    iol_notify(&cli_con->io_task, WS_T_YIELD_REASON_WAIT_FOR_ACK, err);
+    iol_notify(&cli_con->io_task, WS_T_YIELD_REASON_FLUSH, err);
 }
 
 err_t tcp_cli_con_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) {
     ws_cliant_con* cli_con = (ws_cliant_con*)arg;
     if (!p) {
         // cliant closed the connection
+        ws_cli_con_close_pcb(cli_con);
         tcp_cli_con_err(arg, ERR_CLSD);
         return ERR_OK;
     }
