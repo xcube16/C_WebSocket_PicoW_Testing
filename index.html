@@ -36,16 +36,16 @@
                 };
 
                 socket.onmessage = function(message) {
-                    
+
 
                     //const packet = JSON.parse(message.data);
 
                     const sensor_value = 4096 - Number(message.data);
-                    
+
                     let color = Math.min(Math.max(sensor_value / 16, 0), 255);
 
                     document.getElementById("sensor_color").style["background-color"] = "rgb(" + color + "," + color + ",40)"
-                    
+
                     /*if (event.data instanceof Blob) {
                         reader = new FileReader();
 
@@ -75,7 +75,7 @@
                     socket.send("1");
                 }
             }
-            
+
             function turnoff() {
                 if (socket.readyState == 1) {
                     socket.send("0");
@@ -88,21 +88,26 @@
                 }
             }
         </script>
+
+        <style>
+            body {font-size:5vw;}
+            button {font-size:1em;}
+        </style>
     </head>
-    <body style="font-size:5vw;">
+    <body>
         Test page.<br/>
         Status: <div id="status"></div><br/>
 
         Sensor Feedback:
         <div id="sensor_color" style="width:100%; height:20vh; background-color:#333333"></div>
         <br/><br/>
-        <button style="font-size:1em;" onclick="turnon()">On</button>
-        <button style="font-size:1em;" onclick="turnoff()">Off</button>
-        <button style="font-size:1em;" onclick="turntoggle()">Toggle</button>
+        <button onclick="turnon()">On</button>
+        <button onclick="turnoff()">Off</button>
+        <button onclick="turntoggle()">Toggle</button>
 
         <script>
             connect();
-            
+
             function tickyTickTick() {
                 if (socket.readyState == 1) {
                     socket.send("b");
@@ -110,7 +115,7 @@
                 setTimeout(tickyTickTick, 50);
             }
             tickyTickTick();
-            
+
         </script>
     </body>
 </html>
