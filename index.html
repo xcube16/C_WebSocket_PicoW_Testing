@@ -2,6 +2,7 @@
 <!doctype html>
 <html>
     <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <script>
             var socket;
             var conAttempts = 0;
@@ -88,16 +89,16 @@
             }
         </script>
     </head>
-    <body>
+    <body style="font-size:5vw;">
         Test page.<br/>
-        Status: <div id="status"></div><br/><br/>
+        Status: <div id="status"></div><br/>
 
         Sensor Feedback:
-        <div id="sensor_color" style="width:100%; height:50px; background-color:#333333"></div>
+        <div id="sensor_color" style="width:100%; height:20vh; background-color:#333333"></div>
         <br/><br/>
-        <button onclick="turnon()">On</button>
-        <button onclick="turnoff()">Off</button>
-        <button onclick="turntoggle()">Toggle</button>
+        <button style="font-size:1em;" onclick="turnon()">On</button>
+        <button style="font-size:1em;" onclick="turnoff()">Off</button>
+        <button style="font-size:1em;" onclick="turntoggle()">Toggle</button>
 
         <script>
             connect();

@@ -242,14 +242,14 @@ int ws_t_read(ws_cliant_con* cli_con, char* buf, size_t size) {
  *
  * @param cli_con
  * @param buf_ptr Pointer to a buffer. Will be set if the number of bytes is > 0
- * @return size_t Number of bytes available
+ * @return int Number of bytes available, or e negative error code.
  */
-size_t ws_t_peak(ws_cliant_con* cli_con, char** buf_ptr) {
-    size_t ret;
-    while (!(ret = ws_peak(cli_con, buf_ptr))) {
+int ws_t_peak(ws_cliant_con* cli_con, char** buf_ptr) {
+    int ret;
+    while ((ret = ws_peak(cli_con, buf_ptr)) == 0) {
 
-        size_t err;
-        if (err = (size_t) sub_task_yield(WS_T_YIELD_REASON_READ, cli_con->task)) {
+        int err;
+        if (err = (int) sub_task_yield(WS_T_YIELD_REASON_READ, cli_con->task)) {
             return err;
         }
     }
@@ -349,13 +349,15 @@ bool ws_check_reason(void* user_obj, size_t reason, size_t err) {
  * @brief Eats ':', ' ', sneezes when it hits a '\n' (returns 1), and returns 0 for any other char.
  *
  * @param cli_con The connection handle
- * @return int 0 for non-whitespace, 1 for '\n'
+ * @return int 0 for non-whitespace, 1 for '\n', negative for read errors
  */
 int ws_eat_whitespace(ws_cliant_con* cli_con) {
     char* buf;
-    size_t size;
+    int size;
     do {
-        size = ws_t_peak(cli_con, &buf);
+        if ((size = ws_t_peak(cli_con, &buf)) < 0) {
+            return size; // error
+        }
         int i;
         for (i = 0; i < size; i++) {
             char c = buf[i];
@@ -368,19 +370,20 @@ int ws_eat_whitespace(ws_cliant_con* cli_con) {
     } while (true);
 }
 
-
-void ws_consume_line(ws_cliant_con* cli_con) {
+int ws_consume_line(ws_cliant_con* cli_con) {
     int i;
     char* buf;
-    size_t len;
+    int len;
 
-    while(true) {
-        len = ws_t_peak(cli_con, &buf);
+    while (true) {
+        if ((len = ws_t_peak(cli_con, &buf)) < 0) {
+            return len; // error
+        }
 
         for (i = 0; i < len; i++) {
             if (buf[i] == '\r') {
                 ws_consume(cli_con, i); // consume everything before '\r'
-                return;
+                return ERR_OK;
             }
         }
         ws_consume(cli_con, len);
@@ -463,7 +466,7 @@ size_t do_ws_header(ws_cliant_con* cli_con) {
 
         } while(i == len); // If i == len, we have read part of the string, but have not hit the ':' yet
 
-        if (ws_eat_whitespace(cli_con)) { // eat the ": "
+        if (ws_eat_whitespace(cli_con) == 1) { // eat the ": "
             DEBUG_printf("Unexpected line end.\n");
         }
 
@@ -490,6 +493,8 @@ size_t do_ws_header(ws_cliant_con* cli_con) {
         }
 
         while (!ws_eat_whitespace(cli_con)) { // eat "\r\n"
+            // This will happen if we did not fully process a known key
+            // or if we have an unknown key that we need to just skip.
             DEBUG_printf("Part of value unconsumed.\n");
             ws_consume_line(cli_con);
         }
@@ -523,7 +528,7 @@ size_t do_ws_header(ws_cliant_con* cli_con) {
     }
 
     // Write the first part of the responce
-    ws_t_write(cli_con->printed_circuit_board, ws_responce1, sizeof(ws_responce1) - 1, TCP_WRITE_FLAG_MORE);
+    ws_t_write(cli_con, ws_responce1, sizeof(ws_responce1) - 1, TCP_WRITE_FLAG_MORE);
 
     // Write the Accept key
     char hashBuf[20];
@@ -532,10 +537,10 @@ size_t do_ws_header(ws_cliant_con* cli_con) {
     mbedtls_sha1_ret(wsKey, WS_KEY_LEN + (sizeof(ws_uuid) - 1), hashBuf);
     encode_base64(baseBuf, hashBuf, 20);
 
-    ws_t_write(cli_con->printed_circuit_board, baseBuf, sizeof(baseBuf), TCP_WRITE_FLAG_MORE);
+    ws_t_write(cli_con, baseBuf, sizeof(baseBuf), TCP_WRITE_FLAG_MORE);
 
     // Write the first last of the responce
-    ws_t_write(cli_con->printed_circuit_board, ws_responce2, sizeof(ws_responce2) - 1, 0);
+    ws_t_write(cli_con, ws_responce2, sizeof(ws_responce2) - 1, 0);
 
     // Flush the output? I am not really sure if this is needed or even wanted.
     tcp_output(cli_con->printed_circuit_board);
@@ -721,6 +726,7 @@ static err_t tcp_cli_con_poll(void *arg, struct tcp_pcb *tpcb) {
 
     // TODO: implement connection timeouts.
     // return tcp_cli_con_result(arg, -1);
+    DEBUG_printf("-");
 
     return ERR_OK;
 }
@@ -734,6 +740,7 @@ int reset_cli_con_for_new_client(ws_cliant_con* cli_con) {
     // not touching the server stuff.
 
     if (cli_con->task != NULL && !sub_task_reset(cli_con->task)) {
+        // There is likely already an active connection
         DEBUG_printf("Failed to reset the task.\n");
         return ERR_INPROGRESS;
     }
@@ -765,6 +772,7 @@ static err_t tcp_server_accept(void *arg, struct tcp_pcb *client_pcb, err_t err)
     tcp_arg(client_pcb, cli_con);
     tcp_sent(client_pcb, tcp_cli_con_sent);
     tcp_recv(client_pcb, tcp_cli_con_recv);
+    // tcp_cli_con_poll seems to only be called when no traffic is flowing. Maybe one or two blips at other times.
     tcp_poll(client_pcb, tcp_cli_con_poll, 2); // 1 second polling (2 "TCP coarse grained timer shots")
     tcp_err(client_pcb, tcp_cli_con_err);
 
@@ -854,6 +862,7 @@ int main() {
         printf("Wi-Fi init success\n");
     }
 
+    cyw43_state.trace_flags |= CYW43_TRACE_ASYNC_EV;
     cyw43_arch_enable_sta_mode();
 
     if (cyw43_arch_wifi_connect_async(
@@ -915,11 +924,8 @@ int main() {
 
     printf("Connected to wifi with IP: %s\n", ip4addr_ntoa(netif_ip4_addr(cyw43_state.netif)));
 
-
-    //socket();
-
-    //httpd_init();
-
+    // Start our test server. Interrupts or calls to cyw43_arch_poll/cyw43_arch_wait_for_work_until
+    // should be all it need to keep it alive.
     run_tcp_server_test();
 
     while (true) {
