@@ -137,7 +137,7 @@ void set_ack_callback(ws_cliant_con* cli_con, err_t (*call)(void*, u16_t), void*
  */
 int ws_read(ws_cliant_con* cli_con, char* buf, size_t size) {
     if (!cli_con->p_current) {
-        return 0; // We are still waiting for more data
+        return cli_con->printed_circuit_board == NULL ? ERR_CLSD : 0; // We are still waiting for more data
     }
 
     // TODO: pbuf_copy_partial returns 0 on 'failure'. Check that
@@ -156,8 +156,10 @@ int ws_read(ws_cliant_con* cli_con, char* buf, size_t size) {
     // if a large volume of data is being sent and we are just barly keeping up. Once
     // enough data has not been acked (but we have not hit this point, aka yielded for more because we slow).
     // The connection may hickup resulting in a lag spike (or worse?) when it could smoothly chug along.
-    tcp_recved(cli_con->printed_circuit_board, cli_con->recved_current);
-    cli_con->recved_current = 0;
+    if (cli_con->printed_circuit_board != NULL) {
+        tcp_recved(cli_con->printed_circuit_board, cli_con->recved_current);
+        cli_con->recved_current = 0;
+    }
 
     return bytes_read; // We are still waiting for more data
 }
@@ -197,8 +199,10 @@ int ws_consume(ws_cliant_con* cli_con, size_t size) {
     // if a large volume of data is being sent and we are just barly keeping up. Once
     // enough data has not been acked (but we have not hit this point, aka yielded for more because we slow).
     // The connection may hickup resulting in a lag spike (or worse?) when it could smoothly chug along.
-    tcp_recved(cli_con->printed_circuit_board, cli_con->recved_current);
-    cli_con->recved_current = 0;
+    if (cli_con->printed_circuit_board != NULL) {
+        tcp_recved(cli_con->printed_circuit_board, cli_con->recved_current);
+        cli_con->recved_current = 0;
+    }
 
     return ERR_OK;
 }
@@ -259,6 +263,10 @@ int ws_t_peak(ws_cliant_con* cli_con, char** buf_ptr) {
 err_t ws_t_write(ws_cliant_con* cli_con, void* dataptr, size_t len, u8_t apiflags/*, tcpwnd_size_t* countdown*/) {
     err_t ret;
 
+    if (cli_con->printed_circuit_board == NULL) {
+        return ERR_CLSD;
+    }
+
     // Wait until we have at least *some* space on the send buffer
     while (tcp_sndbuf(cli_con->printed_circuit_board) == 0) {
         tcp_output(cli_con->printed_circuit_board);
@@ -303,6 +311,10 @@ size_t ws_t_write_barrier(ws_cliant_con* cli_con) {
     //       to its-safe-to-free-the-buffer? I'm leaning in the direction
     //       of countdown if we can make the tcp_sent callback not suck.
 
+    if (cli_con->printed_circuit_board == NULL) {
+        return ERR_CLSD;
+    }
+
     while (cli_con->printed_circuit_board->snd_queuelen) {
         size_t ret;
         if (ret = (size_t) sub_task_yield(WS_T_YIELD_REASON_FLUSH, cli_con->task)) {
@@ -325,7 +337,7 @@ bool ws_check_reason(void* user_obj, size_t reason, size_t err) {
         case WS_T_YIELD_REASON_FLUSH:
             // When no more pbufs are in the send buffer, we are flushed. All of them have been ack'ed.
             // Checking that tcp_sndbuf is at it's max would also work.
-            return !cli_con->printed_circuit_board->snd_queuelen;
+            return cli_con->printed_circuit_board == NULL || !cli_con->printed_circuit_board->snd_queuelen;
 
         case WS_T_YIELD_REASON_WAIT_FOR_ACK:
             // TODO: better WS_T_YIELD_REASON_WAIT_FOR_ACK
@@ -517,7 +529,7 @@ size_t do_ws_header(ws_cliant_con* cli_con) {
         ws_t_write(cli_con, index_html, sizeof(index_html), 0);
 
         // Flush the output? I am not really sure if this is needed or even wanted.
-        tcp_output(cli_con->printed_circuit_board);
+        //tcp_output(cli_con->printed_circuit_board);
 
         DEBUG_printf("Header complete.\n");
         ws_t_write_barrier(cli_con);
@@ -543,7 +555,7 @@ size_t do_ws_header(ws_cliant_con* cli_con) {
     ws_t_write(cli_con, ws_responce2, sizeof(ws_responce2) - 1, 0);
 
     // Flush the output? I am not really sure if this is needed or even wanted.
-    tcp_output(cli_con->printed_circuit_board);
+    //tcp_output(cli_con->printed_circuit_board);
 
     DEBUG_printf("Header complete.\n");
     ws_t_write_barrier(cli_con);
@@ -873,7 +885,7 @@ int main() {
     do {
         //poll for now, TODO: use netif_set_status_callback();
         status = cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA);
-        int ms = to_ms_since_boot(get_absolute_time());
+        uint32_t ms = to_ms_since_boot(get_absolute_time());
 
         int rate = 500;
         int on_time = rate / 2;

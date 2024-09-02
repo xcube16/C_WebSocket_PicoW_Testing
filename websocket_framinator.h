@@ -196,6 +196,7 @@ void websocket_complete_and_send_frame(ws_framinator* ws_con) {
 
     // TODO: Compute number of scratch/no-ack bytes fromws_con->current_payload_len
     // and by assuming ws_con->head is the true end.
+    err_t ret;
 
     uint16_t header = WS_HEADER_FIN_old | WS_HEADER_OPCODE(WS_HEADER_OPCODE_TEXT);
     if (ws_con->current_payload_len >= WS_HEADER_PAYLOAD_LEN_USE_16BIT) {
@@ -211,7 +212,7 @@ void websocket_complete_and_send_frame(ws_framinator* ws_con) {
         frame->header = (header << 8) | (header >> 8); // TODO: oops! quick fix for little endian u16.
         frame->e_payload_len = (ws_con->current_payload_len << 8) | (ws_con->current_payload_len >> 8); // TODO: oops! quick fix for little endian u16.
 
-        ws_t_write(ws_con->con, &(frame->header),
+        ret = ws_t_write(ws_con->con, &(frame->header),
                 send_len,
                 0 /*no flags*/);
 
@@ -227,12 +228,18 @@ void websocket_complete_and_send_frame(ws_framinator* ws_con) {
             | WS_MRK_LEN(send_len);
         frame->header = (header << 8) | (header >> 8); // TODO: oops! quick fix for little endian u16.
 
-        ws_t_write(ws_con->con, &(frame->header),
+        ret = ws_t_write(ws_con->con, &(frame->header),
                 send_len,
                 0 /*no flags*/);
     }
 
-    tcp_output(ws_con->con->printed_circuit_board);
+    if (ws_con->con->printed_circuit_board == NULL) {
+        return ERR_CLSD;
+    }
+
+    if (ret || (ret = tcp_output(ws_con->con->printed_circuit_board))) {
+        return ret;
+    }
 
     ws_con->current_payload_len = 0;
 }
