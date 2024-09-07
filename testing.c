@@ -930,13 +930,33 @@ int main() {
         //cyw43_arch_poll();
     } while (status != 3);
 
-    printf("Connected to wifi with IP: %s\n", ip4addr_ntoa(netif_ip4_addr(cyw43_state.netif)));
+    printf("Connected to wifi with IP: %s\n", ip4addr_ntoa(netif_ip4_addr(&cyw43_state.netif[0])));
 
     // Start our test server. Interrupts or calls to cyw43_arch_poll/cyw43_arch_wait_for_work_until
     // should be all it need to keep it alive.
     run_tcp_server_test();
 
     while (true) {
+
+        if (uart_is_readable(uart_default)) {
+            char c = (uint8_t) uart_get_hw(uart_default)->dr;
+            printf("Got command %c\n", c);
+            switch (c) {
+                case 'r':
+                    dhcp_reboot(&cyw43_state.netif[0]);
+                    break;
+                case 'u':
+                    netif_set_link_up(&cyw43_state.netif[0]);
+                    break;
+                case 'd':
+                    netif_set_link_down(&cyw43_state.netif[0]);
+                    break;
+                case 'x':
+                    netif_set_link_down(&cyw43_state.netif[0]);
+                    netif_set_link_up(&cyw43_state.netif[0]);
+                    break;
+            }
+        }
 
         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
 
