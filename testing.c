@@ -672,6 +672,7 @@ static err_t tcp_cli_con_sent(void* arg, struct tcp_pcb* tpcb, u16_t len) {
 
     cli_con->notify_ack = true;
 
+    printf("[_]");
     // TODO: FIXME: Handling multiple like this may cause a problem when the task
     // waits for the first reason, and then waits for the second reason. Thus
     // hitting one after the other right here in the same ACK!
@@ -717,9 +718,23 @@ err_t tcp_cli_con_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t er
     // We might have some un-processed pbufs if the subtask yielded for some other reason, stack the new ones on top.
     if (cli_con->p_current) {
         pbuf_cat(cli_con->p_current, p);
+
+        // TODO: With multiple connections, the *total* number of 
+        // Lots of small requests sometimes pile up when the link goes down for a bit.
+        // As we are working through the pile of requests, more new requests pile up.
+        // These new requests (maybe also some old ones in the pile, but it seemed to be
+        // the new ones when debugging), cause us to run out of PBUF_POOL_SIZE in cyw43_cb_process_ethernet().
+        // Coalesce the pbuf's when the chain gets kinda long. We could use memp_pools[MEMP_PBUF_POOL]->stats->used
+        // or 
+        if (memp_pools[MEMP_PBUF_POOL]->stats->used > (PBUF_POOL_SIZE / 3) * 2) {
+            cli_con->p_current = pbuf_coalesce(cli_con->p_current, PBUF_RAW);
+        }
+
     } else {
         cli_con->p_current = p;
     }
+
+    printf("[#]");
 
     iol_notify(&cli_con->io_task, WS_T_YIELD_REASON_READ, ERR_OK);
 
@@ -954,6 +969,9 @@ int main() {
                 case 'x':
                     netif_set_link_down(&cyw43_state.netif[0]);
                     netif_set_link_up(&cyw43_state.netif[0]);
+                    break;
+                case 's':
+                    stats_display();
                     break;
             }
         }
